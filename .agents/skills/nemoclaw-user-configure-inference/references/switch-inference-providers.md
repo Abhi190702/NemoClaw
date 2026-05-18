@@ -1,6 +1,6 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# Switch Inference Models at Runtime
+# Switch NemoClaw Inference Models at Runtime
 
 Change the active inference model while the sandbox is running.
 No restart is required.
@@ -88,12 +88,14 @@ To opt in to `/v1/responses` for a backend you have verified end to end, set
 $ NEMOCLAW_PREFERRED_API=openai-responses nemoclaw onboard
 ```
 
-> **Note:** `NEMOCLAW_INFERENCE_API_OVERRIDE` patches the config at container startup but
-> does not update the Dockerfile ARG baked into the image.
-> If you recreate the sandbox without the override env var, the image reverts to
-> the original API path.
-> A fresh `nemoclaw onboard` is the reliable fix because it updates both the
-> session and the baked image.
+**Note:**
+
+`NEMOCLAW_INFERENCE_API_OVERRIDE` patches the config at container startup but
+does not update the Dockerfile ARG baked into the image.
+If you recreate the sandbox without the override env var, the image reverts to
+the original API path.
+A fresh `nemoclaw onboard` is the reliable fix because it updates both the
+session and the baked image.
 
 ## Cross-Provider Switching
 

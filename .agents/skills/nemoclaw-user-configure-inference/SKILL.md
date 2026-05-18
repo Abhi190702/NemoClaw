@@ -8,6 +8,10 @@ description: "Connects NemoClaw to a local inference server. Use when setting up
 
 # Use a Local Inference Server with NemoClaw
 
+## Gotchas
+
+- Ollama is convenient for local chat, but some model/template combinations can return tool calls as plain text under realistic agent load.
+
 ## Prerequisites
 
 - NemoClaw installed.
@@ -62,13 +66,13 @@ If the daemon does not become reachable, onboarding prints PowerShell commands y
 Use one Ollama instance on port `11434` at a time.
 If both WSL and Windows-host Ollama are running, pick the intended menu entry during onboarding so NemoClaw validates and pulls models against the right daemon.
 
-:::{caution}
+**Warning:**
+
 Ollama is convenient for local chat, but some model/template combinations can
 return tool calls as plain text under realistic agent load. If the TUI shows raw
 JSON such as `{"name":"memory_search","arguments":{...}}` instead of running a
 tool, switch to vLLM with `--enable-auto-tool-choice` and the correct
 `--tool-call-parser`. See Tool-Calling Reliability (use the `nemoclaw-user-configure-inference` skill).
-:::
 
 ### Authenticated Reverse Proxy
 
@@ -263,8 +267,10 @@ Managed vLLM uses these profiles:
 | DGX Station | `Qwen/Qwen3.6-27B-FP8` |
 | Linux with an NVIDIA GPU | `nvidia/NVIDIA-Nemotron-3-Nano-4B-FP8` |
 
-> **Note:** NemoClaw forces the `chat/completions` API path for vLLM.
-> The vLLM `/v1/responses` endpoint does not run the `--tool-call-parser`, so tool calls arrive as raw text.
+**Note:**
+
+NemoClaw forces the `chat/completions` API path for vLLM.
+The vLLM `/v1/responses` endpoint does not run the `--tool-call-parser`, so tool calls arrive as raw text.
 
 ### Non-Interactive Setup
 
@@ -336,8 +342,10 @@ In non-interactive mode, onboard exits with login instructions if Docker is not 
 If `NGC_API_KEY` or `NVIDIA_API_KEY` is already exported, NemoClaw passes it into the managed NIM container through the process environment instead of command-line arguments.
 If the NIM container exits before the health endpoint becomes ready, onboarding stops early and prints the last container log lines.
 
-> **Note:** NIM uses vLLM internally.
-> The same `chat/completions` API path restriction applies.
+**Note:**
+
+NIM uses vLLM internally.
+The same `chat/completions` API path restriction applies.
 
 ### Non-Interactive Setup
 

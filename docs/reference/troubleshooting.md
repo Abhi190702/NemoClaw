@@ -1,6 +1,6 @@
 ---
 title:
-  page: "NemoClaw Troubleshooting Guide"
+  page: "Troubleshooting"
   nav: "Troubleshooting"
 description:
   main: "Diagnose and resolve common NemoClaw installation, onboarding, and runtime issues."

@@ -4,7 +4,9 @@
 
 This page covers common issues you may encounter when installing, onboarding, or running NemoClaw, along with their resolution steps.
 
-> **Get Help:** If your issue is not listed here, join the [NemoClaw Discord channel](https://discord.gg/XFpfPv9Uvx) to ask questions and get help from the community. You can also [file an issue on GitHub](https://github.com/NVIDIA/NemoClaw/issues/new).
+**Get Help:**
+
+If your issue is not listed here, join the [NemoClaw Discord channel](https://discord.gg/XFpfPv9Uvx) to ask questions and get help from the community. You can also [file an issue on GitHub](https://github.com/NVIDIA/NemoClaw/issues/new).
 
 ## Installation
 
@@ -514,9 +516,11 @@ Follow these steps to reconnect.
 
    Telegram, Discord, and Slack are handled by OpenShell-managed channel messaging configured at onboarding, not by a separate bridge process from `nemoclaw tunnel start`. To pause a single bridge without destroying the sandbox, use `nemoclaw <name> channels stop <channel>`.
 
-> **If the sandbox does not recover:** If the sandbox remains missing after restarting the gateway, run `nemoclaw onboard` to recreate it.
-> The wizard prompts for confirmation before destroying an existing sandbox. If you confirm, it **destroys and recreates** the sandbox. Workspace files (SOUL.md, USER.md, IDENTITY.md, AGENTS.md, MEMORY.md, and daily memory notes) are lost.
-> Back up your workspace first by following the instructions at Back Up and Restore (use the `nemoclaw-user-manage-sandboxes` skill).
+**If the sandbox does not recover:**
+
+If the sandbox remains missing after restarting the gateway, run `nemoclaw onboard` to recreate it.
+The wizard prompts for confirmation before destroying an existing sandbox. If you confirm, it **destroys and recreates** the sandbox. Workspace files (SOUL.md, USER.md, IDENTITY.md, AGENTS.md, MEMORY.md, and daily memory notes) are lost.
+Back up your workspace first by following the instructions at Back Up and Restore (use the `nemoclaw-user-manage-sandboxes` skill).
 
 ### Sandbox is running an outdated agent version
 
@@ -992,7 +996,7 @@ $ nemoclaw <name> logs
 
 Use `--follow` to stream logs in real time while debugging.
 
-(dgx-spark)=
+<a id="dgx-spark"></a>
 
 ## DGX Spark
 
@@ -1053,8 +1057,10 @@ If GPU passthrough is not required on this host, rerun onboarding with `--no-gpu
 On Linux Docker-driver gateways, NemoClaw may create the sandbox first and then recreate the OpenShell-managed Docker container with NVIDIA GPU flags.
 If that compatibility patch fails, onboarding leaves the failed sandbox and diagnostic bundle in place so you can inspect the OpenShell and Docker state.
 
-> **Note:** Starting with NemoClaw v0.0.43, the standard installer handles the `/proc/<pid>/task/<tid>/comm` permission case during this patch path.
-> If an older release fails direct GPU proof with that path and `Permission denied`, upgrade NemoClaw and rerun onboarding.
+**Note:**
+
+Starting with NemoClaw v0.0.43, the standard installer handles the `/proc/<pid>/task/<tid>/comm` permission case during this patch path.
+If an older release fails direct GPU proof with that path and `Permission denied`, upgrade NemoClaw and rerun onboarding.
 
 The output includes a cleanup command such as:
 
@@ -1083,7 +1089,7 @@ $ pip install ...
 NVIDIA AI Workbench's Traefik proxy binds ports 3000 and 10000.
 If you run other services on Spark that expect port 3000, bind them to a different port.
 
-(windows-wsl-2)=
+<a id="windows-wsl-2"></a>
 
 ## Windows Subsystem for Linux
 
@@ -1205,11 +1211,13 @@ Refer to Commands (use the `nemoclaw-user-reference` skill) for the full list of
 After leaving NemoClaw running for an extended period on Brev, the OpenClaw dashboard may return `ERR_CONNECTION_RESET` or fail to load in the browser.
 The agent may still respond on messaging channels such as Telegram or Slack while the dashboard is unreachable.
 
-> **Back up your workspace first:** Take a snapshot before running onboard to protect your workspace files.
->
-> ```console
-> $ nemoclaw <name> snapshot create
-> ```
+**Back up your workspace first:**
+
+Take a snapshot before running onboard to protect your workspace files.
+
+```console
+$ nemoclaw <name> snapshot create
+```
 
 Re-run onboarding to restore dashboard connectivity:
 
