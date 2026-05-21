@@ -53,7 +53,9 @@ else
   : >"$_START_LOG"
   chmod 600 "$_START_LOG" 2>/dev/null || true
 fi
-exec > >(tee -a "$_START_LOG") 2> >(tee -a "$_START_LOG" >&2)
+exec 3>&1
+exec 4>&2
+exec > >(tee -a "$_START_LOG" >&3) 2> >(tee -a "$_START_LOG" >&4)
 
 # ── Source shared sandbox initialisation library ─────────────────
 # Single source of truth for security-sensitive primitives shared with
@@ -189,6 +191,18 @@ print(port)
 PYPORT
 }
 
+emit_startup_error() {
+  local message="$1"
+  if [ -n "${_START_LOG:-}" ]; then
+    printf '%s\n' "$message" >>"$_START_LOG" 2>/dev/null || true
+  fi
+  if { true >&4; } 2>/dev/null; then
+    printf '%s\n' "$message" >&4
+  else
+    printf '%s\n' "$message" >&2
+  fi
+}
+
 # Validate NEMOCLAW_DASHBOARD_PORT if set (same behavior as ports.js: fail fast).
 _DASHBOARD_PORT_RAW="${NEMOCLAW_DASHBOARD_PORT:-}"
 if [ -z "$_DASHBOARD_PORT_RAW" ]; then
@@ -209,7 +223,7 @@ else
     _DASHBOARD_PORT_VALID=0
   fi
   if [ "$_DASHBOARD_PORT_VALID" -ne 1 ]; then
-    echo "[SECURITY] Invalid NEMOCLAW_DASHBOARD_PORT='${NEMOCLAW_DASHBOARD_PORT}' — must be an integer between 1024 and 65535" >&2
+    emit_startup_error "[SECURITY] Invalid NEMOCLAW_DASHBOARD_PORT='${NEMOCLAW_DASHBOARD_PORT}' — must be an integer between 1024 and 65535"
     exit 1
   fi
 fi

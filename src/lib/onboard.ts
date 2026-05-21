@@ -7113,9 +7113,9 @@ async function setupNim(
           ensureOllamaLinuxExtractionDependencies();
           console.log(
             "  The Ollama installer creates a system user, a systemd service, and writes to /usr/local. " +
-              "It uses sudo for those steps; you may be prompted for your password.",
+              "It uses sudo, may ask for your password, and can take a few minutes; installer output will stream below.",
           );
-          runShell("set -o pipefail; curl -fsSL https://ollama.com/install.sh | sh");
+          runShell("set -o pipefail; curl -fsSL https://ollama.com/install.sh | sh", { stdio: "inherit" });
           // Give the just-started ollama.service a moment to bind port
           // 11434 before we probe or apply the systemd drop-in override.
           sleep(2);

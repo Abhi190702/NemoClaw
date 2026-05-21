@@ -4734,9 +4734,9 @@ runner.run = (command, opts) => {
   runCommands.push(rendered);
   events.push({ type: "command", value: rendered });
 };
-runner.runShell = (command, opts) => {
+runner.runShell = (command, opts = {}) => {
   runCommands.push(command);
-  events.push({ type: "command", value: command });
+  events.push({ type: "command", value: command, stdio: opts.stdio || null });
 };
 registry.updateSandbox = (_name, update) => updates.push(update);
 
@@ -4820,6 +4820,14 @@ const { setupNim } = require(${onboardPath});
       (event: { type: string; value: string }) =>
         event.type === "command" && event.value.includes("ollama.com/install.sh"),
     );
+    const installerProgressEventIndex = payload.events.findIndex(
+      (event: { type: string; value: string }) =>
+        event.type === "log" && event.value.includes("installer output will stream below"),
+    );
+    const installerCommandEvent = payload.events.find(
+      (event: { type: string; value: string }) =>
+        event.type === "command" && event.value.includes("ollama.com/install.sh"),
+    );
     assert.ok(
       zstdWarningEventIndex >= 0 && zstdWarningEventIndex < zstdCommandEventIndex,
       "Should explain the zstd sudo install before running apt-get",
@@ -4827,6 +4835,15 @@ const { setupNim } = require(${onboardPath});
     assert.ok(
       installerWarningEventIndex >= 0 && installerWarningEventIndex < installerCommandEventIndex,
       "Should explain the Ollama installer sudo usage before running it",
+    );
+    assert.ok(
+      installerProgressEventIndex >= 0 && installerProgressEventIndex < installerCommandEventIndex,
+      "Should warn that the Ollama installer can take a few minutes before running it",
+    );
+    assert.equal(
+      installerCommandEvent?.stdio,
+      "inherit",
+      "Should stream Ollama installer output live",
     );
     assert.ok(
       payload.runCommands.some((cmd: string) => cmd.includes("ollama.com/install.sh")),
@@ -4990,6 +5007,7 @@ child_process.spawnSync = (cmd, args, opts) => {
 let promptCalls = 0;
 const updates = [];
 const runCommands = [];
+const runShellCalls = [];
 
 credentials.prompt = async () => {
   promptCalls += 1;
@@ -5009,8 +5027,9 @@ runner.runCapture = (command) => {
 runner.run = (command) => {
   runCommands.push(typeof command === "string" ? command : command.join(" "));
 };
-runner.runShell = (command) => {
+runner.runShell = (command, opts = {}) => {
   runCommands.push(command);
+  runShellCalls.push({ command, stdio: opts.stdio || null });
 };
 registry.updateSandbox = (_name, update) => updates.push(update);
 
@@ -5025,7 +5044,7 @@ const { setupNim } = require(${onboardPath});
   console.log = (...args) => lines.push(args.join(" "));
   try {
     const result = await setupNim("noninteractive-install-test", null);
-    originalLog(JSON.stringify({ result, promptCalls, updates, lines, runCommands }));
+    originalLog(JSON.stringify({ result, promptCalls, updates, lines, runCommands, runShellCalls }));
   } finally {
     console.log = originalLog;
   }
@@ -5072,6 +5091,14 @@ const { setupNim } = require(${onboardPath});
     assert.ok(
       payload.runCommands.some((cmd: string) => cmd.includes("ollama.com/install.sh")),
       "Should use the Ollama installer when requested non-interactively on a fresh host",
+    );
+    const ollamaInstallShellCall = payload.runShellCalls.find((call: { command: string }) =>
+      call.command.includes("ollama.com/install.sh"),
+    );
+    assert.equal(
+      ollamaInstallShellCall?.stdio,
+      "inherit",
+      "non-interactive Ollama install should stream installer output live",
     );
     assert.ok(
       payload.runCommands.some((cmd: string) =>
