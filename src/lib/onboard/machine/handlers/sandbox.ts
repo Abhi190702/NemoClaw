@@ -79,6 +79,11 @@ export interface SandboxStateOptions<Gpu, Agent, WebSearchConfig, MessagingChann
     recordStepComplete(stepName: string, updates: SessionUpdates): Promise<Session>;
     toSessionUpdates(updates: Record<string, unknown>): SessionUpdates;
     skippedStepMessage(stepName: string, detail?: string | null): void;
+    recordStateSkipped(state: "sandbox", metadata?: Record<string, unknown> | null): Promise<Session>;
+    recordRepairEvent(
+      type: "state.repair.started" | "state.repair.completed" | "state.repair.failed",
+      options?: { state?: "sandbox"; error?: string | null; metadata?: Record<string, unknown> | null },
+    ): Promise<Session>;
     error(message?: string): void;
     exitProcess(code: number): never;
   };
@@ -182,6 +187,7 @@ export async function handleSandboxState<Gpu, Agent, WebSearchConfig, MessagingC
     if (webSearchConfig) deps.note("  [resume] Reusing Brave Search configuration already baked into the sandbox.");
     selectedMessagingChannels = session?.messagingChannels ?? [];
     deps.skippedStepMessage("sandbox", sandboxName);
+    await deps.recordStateSkipped("sandbox", { reason: "resume", sandboxName });
   } else {
     if (resume && session?.steps?.sandbox?.status === "complete") {
       if (resumeAgentChanged) {
@@ -206,7 +212,25 @@ export async function handleSandboxState<Gpu, Agent, WebSearchConfig, MessagingC
         if (sandboxName) deps.removeSandboxFromRegistry(sandboxName);
       } else if (sandboxReuseState === "not_ready") {
         deps.note(`  [resume] Recorded sandbox '${sandboxName}' exists but is not ready; recreating it.`);
-        deps.repairRecordedSandbox(sandboxName);
+        const repairMetadata = { repair: "recorded-sandbox-cleanup", sandboxName };
+        await deps.recordRepairEvent("state.repair.started", {
+          state: "sandbox",
+          metadata: repairMetadata,
+        });
+        try {
+          deps.repairRecordedSandbox(sandboxName);
+        } catch (err) {
+          await deps.recordRepairEvent("state.repair.failed", {
+            state: "sandbox",
+            error: err instanceof Error ? err.message : String(err),
+            metadata: repairMetadata,
+          });
+          throw err;
+        }
+        await deps.recordRepairEvent("state.repair.completed", {
+          state: "sandbox",
+          metadata: repairMetadata,
+        });
       } else {
         deps.note("  [resume] Recorded sandbox state is unavailable; recreating it.");
         if (sandboxName) deps.removeSandboxFromRegistry(sandboxName);
