@@ -3087,6 +3087,7 @@ describe("CLI dispatch", () => {
     const markerFile = path.join(home, "logs-follow-source-exit-args");
     fs.mkdirSync(localBin, { recursive: true });
     fs.mkdirSync(registryDir, { recursive: true });
+    writeHealthyDockerStub(localBin);
     fs.writeFileSync(
       path.join(registryDir, "sandboxes.json"),
       JSON.stringify({
@@ -3166,6 +3167,7 @@ describe("CLI dispatch", () => {
     const releaseFile = path.join(home, "release-log-children");
     fs.mkdirSync(localBin, { recursive: true });
     writeSandboxRegistry(home);
+    writeHealthyDockerStub(localBin);
     fs.writeFileSync(
       path.join(localBin, "openshell"),
       [
