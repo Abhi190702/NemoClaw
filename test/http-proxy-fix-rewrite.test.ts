@@ -61,9 +61,6 @@ describe("http-proxy-fix rewrite (deepinfra-style failure, follow-up to #2344)",
     captured = null;
     vi.stubEnv("NODE_USE_ENV_PROXY", "1");
     vi.stubEnv("HTTPS_PROXY", PROXY_URL);
-    vi.stubEnv("https_proxy", "");
-    vi.stubEnv("HTTP_PROXY", "");
-    vi.stubEnv("http_proxy", "");
     loadWrapper();
     // Wrapper grabs `https` via a fresh require inside the rewrite branch,
     // so spying on https.request after the wrapper installs is fine.

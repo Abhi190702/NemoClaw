@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
-// http-proxy-fix.js — http.request() wrapper resolving the double-proxy
-// conflict between NODE_USE_ENV_PROXY=1 (Node.js 22+) and HTTP libraries
-// that independently read HTTPS_PROXY (axios, follow-redirects,
-// proxy-from-env). See NemoClaw#2109.
+// http-proxy-fix.js — transport wrapper resolving proxy mismatches between
+// NODE_USE_ENV_PROXY=1 (Node.js 22+) and HTTP libraries that independently
+// read HTTPS_PROXY (axios, follow-redirects, proxy-from-env). See
+// NemoClaw#2109 and NemoClaw#4730.
 //
 // Problem:
 //   Node.js 22 with NODE_USE_ENV_PROXY=1 (baked into the OpenShell base
@@ -14,11 +14,17 @@
 //   rejects it with "FORWARD rejected: HTTPS requires CONNECT".
 //
 // Fix:
-//   Wrap http.request() — the lowest common denominator every HTTP client
+//   Wrap http.request() — the lowest common denominator many HTTP clients
 //   bottoms out at. Detect FORWARD-mode requests (hostname = proxy IP,
 //   path = full https:// URL) and rewrite them as https.request() against
 //   the real target host, letting NODE_USE_ENV_PROXY handle the CONNECT
 //   tunnel correctly.
+//
+//   Also wrap fetch() only for https://inference.local/*, which OpenClaw cron
+//   provider preflight can reach through undici/fetch instead of http.request.
+//   The wrapper converts that fetch into the same FORWARD-mode shape handled
+//   above, preserving NemoClaw's managed inference.local route while avoiding
+//   a raw DNS lookup for the sandbox-only host.
 //
 // Earlier PR #2110 tried a Module._load hook intercepting require('axios').
 // That could not catch follow-redirects + proxy-from-env bundled as ESM in
@@ -44,8 +50,13 @@
     process.env.http_proxy ||
     '';
   var proxyHost = '';
+  var proxyPort = '';
+  var proxyProtocol = '';
   try {
-    proxyHost = new URL(proxyUrl).hostname;
+    var parsedProxy = new URL(proxyUrl);
+    proxyHost = parsedProxy.hostname;
+    proxyPort = parsedProxy.port || '80';
+    proxyProtocol = parsedProxy.protocol;
   } catch (_e) {
     /* no usable proxy configured */
   }
@@ -109,6 +120,143 @@
       out[key] = headers[key];
     }
     return out;
+  }
+
+  function fetchInputUrl(input) {
+    if (typeof input === 'string') return input;
+    if (input && typeof input.url === 'string') return input.url;
+    if (input && typeof input.href === 'string') return input.href;
+    return '';
+  }
+
+  function inferenceLocalFetchUrl(input) {
+    var raw = fetchInputUrl(input);
+    if (!raw) return null;
+    try {
+      var target = new URL(raw);
+      if (target.protocol !== 'https:' || target.hostname !== 'inference.local') {
+        return null;
+      }
+      return target;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  function requestHeaders(request) {
+    var out = {};
+    request.headers.forEach(function (value, key) {
+      out[key] = value;
+    });
+    return out;
+  }
+
+  function responseHeaders(headers) {
+    var out = [];
+    Object.keys(headers || {}).forEach(function (key) {
+      var value = headers[key];
+      if (Array.isArray(value)) {
+        value.forEach(function (entry) {
+          if (entry != null) out.push([key, String(entry)]);
+        });
+      } else if (value != null) {
+        out.push([key, String(value)]);
+      }
+    });
+    return out;
+  }
+
+  function responseBody(method, statusCode, res) {
+    if (method === 'HEAD' || statusCode === 204 || statusCode === 304) {
+      return null;
+    }
+    var stream = require('stream');
+    if (stream.Readable && typeof stream.Readable.toWeb === 'function') {
+      return stream.Readable.toWeb(res);
+    }
+    return res;
+  }
+
+  async function fetchViaForwardProxy(input, init, originalFetch, thisArg) {
+    if (proxyProtocol !== 'http:' || typeof Request === 'undefined') {
+      return originalFetch.call(thisArg, input, init);
+    }
+
+    var request;
+    try {
+      request = new Request(input, init);
+    } catch (_e) {
+      return originalFetch.call(thisArg, input, init);
+    }
+
+    var target = inferenceLocalFetchUrl(request);
+    if (!target) return originalFetch.call(thisArg, input, init);
+
+    var method = request.method || 'GET';
+    var headers = requestHeaders(request);
+    var body = null;
+    if (method !== 'GET' && method !== 'HEAD') {
+      body = Buffer.from(await request.clone().arrayBuffer());
+      if (
+        body.length > 0 &&
+        !Object.prototype.hasOwnProperty.call(headers, 'content-length')
+      ) {
+        headers['content-length'] = String(body.length);
+      }
+    }
+
+    return new Promise(function (resolve, reject) {
+      var req = http.request(
+        {
+          hostname: proxyHost,
+          port: proxyPort,
+          path: target.href,
+          method: method,
+          headers: headers,
+          signal: request.signal,
+        },
+        function (res) {
+          var status = res.statusCode || 200;
+          resolve(
+            new Response(responseBody(method, status, res), {
+              status: status,
+              statusText: res.statusMessage || '',
+              headers: responseHeaders(res.headers),
+            })
+          );
+        }
+      );
+      req.on('error', reject);
+      if (body && body.length > 0) req.write(body);
+      req.end();
+    });
+  }
+
+  /**
+   * NemoClaw#4730: OpenClaw 2026.5.27 cron provider preflight reaches the
+   * managed provider base URL through fetch()/undici instead of http.request().
+   * Native fetch bypasses the FORWARD-mode rewrite above, so it can attempt
+   * raw DNS for the sandbox-only inference.local host and skip cron agentTurn
+   * runs before normal model calls get a chance to use the proxy-aware path.
+   *
+   * This shim is intentionally narrow: only https://inference.local/* is
+   * converted into the existing proxy path. Other fetches keep their original
+   * transport, and the shim does not hardcode Ollama or modify NO_PROXY.
+   */
+  function wrapFetchForInferenceLocal() {
+    if (typeof globalThis.fetch !== 'function') return;
+    if (globalThis.__nemoclawFetchPatched) return;
+    globalThis.__nemoclawFetchPatched = true;
+
+    var _originalFetch = globalThis.fetch.bind(globalThis);
+    var wrappedFetch = async function (input, init) {
+      if (!inferenceLocalFetchUrl(input)) {
+        return _originalFetch(input, init);
+      }
+      return fetchViaForwardProxy(input, init, _originalFetch, globalThis);
+    };
+    wrappedFetch.__nemoclawInferenceLocalProxyFix = true;
+    globalThis.fetch = wrappedFetch;
   }
 
   http.request = function (options, callback) {
@@ -177,4 +325,6 @@
     }
     return origRequest.apply(http, arguments);
   };
+
+  wrapFetchForInferenceLocal();
 })();

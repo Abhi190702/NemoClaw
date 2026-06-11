@@ -216,9 +216,6 @@ describe("http-proxy-fix end-to-end against a local OpenAI-compatible mock", () 
     // an assertion threw before afterEach.
     vi.stubEnv("NODE_USE_ENV_PROXY", "1");
     vi.stubEnv("HTTPS_PROXY", `http://${PROXY_HOST}:3128`);
-    vi.stubEnv("https_proxy", "");
-    vi.stubEnv("HTTP_PROXY", "");
-    vi.stubEnv("http_proxy", "");
     origHttpRequest = http.request;
     loadWrapper();
   });

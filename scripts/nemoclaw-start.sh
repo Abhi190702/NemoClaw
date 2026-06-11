@@ -2048,7 +2048,8 @@ if [ -n "${SSL_CERT_FILE:-}" ] && [ -f "${SSL_CERT_FILE}" ]; then
   export GIT_SSL_CAINFO="$SSL_CERT_FILE"
 fi
 
-# HTTP library + NODE_USE_ENV_PROXY double-proxy fix (NemoClaw#2109).
+# HTTP library + NODE_USE_ENV_PROXY proxy transport fixes
+# (NemoClaw#2109, NemoClaw#4730).
 # Node.js 22 sets NODE_USE_ENV_PROXY=1 in the OpenShell base image, which
 # intercepts https.request() calls and handles proxying via CONNECT tunnel.
 # HTTP libraries (axios, follow-redirects, proxy-from-env) also read
@@ -2056,9 +2057,12 @@ fi
 # request — the L7 proxy rejects with "FORWARD rejected: HTTPS requires
 # CONNECT".
 #
-# The preload wraps http.request() — the lowest common denominator every
+# The preload wraps http.request() — the lowest common denominator many
 # HTTP client bottoms out at — and rewrites FORWARD-mode requests back to
 # https.request() so NODE_USE_ENV_PROXY can handle the CONNECT tunnel.
+# It also routes fetch() calls to https://inference.local/* through that same
+# path so OpenClaw cron provider preflight does not bypass the proxy and try
+# a raw DNS lookup for the sandbox-only inference.local host.
 #
 # Earlier PR #2110 intercepted require('axios') via a Module._load hook;
 # that could not catch follow-redirects + proxy-from-env bundled as ESM
