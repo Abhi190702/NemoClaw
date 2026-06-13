@@ -118,11 +118,7 @@ describe("http-proxy-fix fetch routing for inference.local (#4730)", () => {
           addChunk(chunks, chunk, encoding);
           capturedBody = Buffer.concat(chunks).toString("utf-8");
           const done =
-            typeof chunk === "function"
-              ? chunk
-              : typeof encoding === "function"
-                ? encoding
-                : cb;
+            typeof chunk === "function" ? chunk : typeof encoding === "function" ? encoding : cb;
           if (done) done();
           process.nextTick(() => callback?.(readableResponse('{"ok":true}')));
           return req;
@@ -186,9 +182,7 @@ describe("http-proxy-fix fetch routing for inference.local (#4730)", () => {
   it("is idempotent if the preload is required more than once", async () => {
     const wrapped = globalThis.fetch;
     loadWrapper();
-    expect((globalThis as { __nemoclawFetchPatched?: boolean }).__nemoclawFetchPatched).toBe(
-      true,
-    );
+    expect((globalThis as { __nemoclawFetchPatched?: boolean }).__nemoclawFetchPatched).toBe(true);
     expect(globalThis.fetch).toBe(wrapped);
 
     await fetch("https://inference.local/v1/models");
