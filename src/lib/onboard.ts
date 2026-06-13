@@ -481,6 +481,8 @@ const {
   preflightDashboardPortRangeAvailability,
   resolveCreateSandboxDashboardPort,
 } = require("./onboard/dashboard-port") as typeof import("./onboard/dashboard-port");
+const { assertDashboardPortNotReserved, buildRequiredPreflightPorts } =
+  require("./onboard/preflight-ports") as typeof import("./onboard/preflight-ports");
 const { tryCleanupOrphanedDashboardForward } =
   require("./onboard/orphaned-dashboard-forward") as typeof import("./onboard/orphaned-dashboard-forward");
 const { destroyGatewayForReuse } =
@@ -1750,22 +1752,14 @@ async function preflight(
   // skip the dashboard port check entirely — ensureDashboardForward will
   // find a free port.
   const dashboardPortToCheck = _preflightDashboardPort ?? null;
-  const requiredPorts = [
-    {
-      port: GATEWAY_PORT,
-      label: "OpenShell gateway",
-      envVar: "NEMOCLAW_GATEWAY_PORT",
-    },
-    ...(dashboardPortToCheck !== null
-      ? [
-          {
-            port: dashboardPortToCheck,
-            label: `${cliDisplayName()} dashboard`,
-            envVar: "NEMOCLAW_DASHBOARD_PORT",
-          },
-        ]
-      : []),
-  ];
+  // #4984 — fail fast on an explicit reserved dashboard port; deferred paths
+  // (CHAT_UI_URL / persisted) are caught at createSandbox.
+  assertDashboardPortNotReserved(dashboardPortToCheck);
+  const requiredPorts = buildRequiredPreflightPorts({
+    gatewayPort: GATEWAY_PORT,
+    dashboardPort: dashboardPortToCheck,
+    dashboardLabel: `${cliDisplayName()} dashboard`,
+  });
   for (const { port, label, envVar } of requiredPorts) {
     const portCheckOptions =
       port === GATEWAY_PORT ? dockerDriverGatewayEnv.getGatewayPortCheckOptions() : undefined;
@@ -2332,8 +2326,14 @@ async function startGateway(
   return startGatewayWithOptions(_gpu, { exitOnFailure: true, gpuPassthrough });
 }
 
-async function startGatewayForRecovery(_gpu: ReturnType<typeof nim.detectGpu>): Promise<void> {
-  return startGatewayWithOptions(_gpu, { exitOnFailure: false });
+async function startGatewayForRecovery(options = {}): Promise<void> {
+  return require("./onboard/gateway-recovery").startGatewayForRecovery(options, {
+    getGatewayStartEnv,
+    runCaptureOpenshell,
+    runOpenshell,
+    startGatewayWithOptions,
+    isLinuxDockerDriverGatewayEnabled,
+  });
 }
 
 function getGatewayStartEnv(): Record<string, string> {
@@ -2353,17 +2353,7 @@ function getGatewayStartEnv(): Record<string, string> {
   return gatewayEnv;
 }
 
-/**
- * Memoizes `applyOverlayfsAutoFix` per upstream image for the lifetime of
- * the process. The expensive work (host assessment + image inspect / pull /
- * build) only needs to happen once per onboard invocation; both
- * `startGatewayWithOptions` and `recoverGatewayRuntime` go through
- * `getGatewayStartEnv()`, and without this cache the recovery path would
- * re-run the full assessment.
- *
- * Reset on a per-process basis only — env-var changes mid-process are
- * not modelled here and shouldn't happen in the CLI's normal flow.
- */
+/** Cache the overlayfs auto-fix result per upstream image for this onboard process. */
 const overlayFixResultCache = new Map<string, string | null>();
 
 /**
@@ -4798,11 +4788,11 @@ async function onboard(opts: OnboardOptions = {}): Promise<void> {
   if (!noticeAccepted) {
     process.exit(1);
   }
-  // Validate NEMOCLAW_PROVIDER early so invalid values fail before
-  // preflight (Docker/OpenShell checks). Without this, users see a
+  // Validate NEMOCLAW_PROVIDER and NEMOCLAW_VLLM_MODEL early so invalid values
+  // fail before preflight (Docker/OpenShell checks). Without this, users see a
   // misleading 'Docker is not reachable' error instead of the real
-  // problem: an unsupported provider value.
-  getRequestedProviderHint();
+  // problem: an unsupported provider value or unrecognised vLLM model slug.
+  resumeConfig.preflightEarlyOnboardEnv();
   const lockResult = onboardSession.acquireOnboardLock(
     `nemoclaw onboard${resume ? " --resume" : ""}${fresh ? " --fresh" : ""}${isNonInteractive() ? " --non-interactive" : ""}${requestedFromDockerfile ? ` --from ${requestedFromDockerfile}` : ""}`,
   );

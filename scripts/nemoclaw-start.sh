@@ -218,6 +218,16 @@ mark_in_container_gateway() {
   : >/tmp/nemoclaw-gateway-local 2>/dev/null || true
 }
 
+# Record the PID of the live in-container gateway so the Docker HEALTHCHECK
+# can confirm the actual gateway process (not merely *some* `openclaw`
+# process) is still alive when the in-container curl probe cannot reach the
+# dashboard port (#4952). Refreshed on every (re)launch so a respawned gateway
+# is tracked and a window where the gateway is down reads as unhealthy.
+# Best-effort: a write failure must never block startup.
+record_gateway_pid() {
+  printf '%s\n' "${1:-}" >/tmp/nemoclaw-gateway.pid 2>/dev/null || true
+}
+
 _chat_ui_url_port() {
   [ -n "${CHAT_UI_URL:-}" ] || return 1
   python3 - "$CHAT_UI_URL" <<'PYPORT'
@@ -286,7 +296,38 @@ else
 fi
 PUBLIC_PORT="$_DASHBOARD_PORT"
 export OPENCLAW_GATEWAY_PORT="$_DASHBOARD_PORT"
-export OPENCLAW_GATEWAY_URL="ws://127.0.0.1:${_DASHBOARD_PORT}"
+# Gateway WebSocket URL host. Default to the sandbox's own primary interface
+# address rather than loopback: spawned sub-agent runtimes (sessions_spawn)
+# dial OPENCLAW_GATEWAY_URL from inside the enforced process tree, where the
+# OpenShell L7 proxy transparently intercepts connect() and hard-denies
+# loopback destinations regardless of policy. With a loopback URL every child
+# WebSocket upgrade dies with `1006 abnormal closure (no close frame)` and
+# nothing reaches the gateway log. The gateway listens on 0.0.0.0 and the
+# eth0 address is allowlisted in the base sandbox policy
+# (openclaw_gateway_dialback in openclaw-sandbox.yaml), so the same dial
+# works from both enforced and unenforced contexts. Falls back to loopback
+# when no interface address is detectable (the pre-fix behavior). Override
+# with NEMOCLAW_GATEWAY_WS_HOST.
+_GATEWAY_WS_HOST="${NEMOCLAW_GATEWAY_WS_HOST:-}"
+# Only auto-derive inside a real sandbox (the Dockerfile.base image always
+# has /sandbox); on dev machines and CI runners the loopback default is
+# kept. NEMOCLAW_SANDBOX_ROOT is overridable for tests. `|| true` keeps
+# the assignment safe under `set -o pipefail` when hostname lacks -I.
+if [ -z "$_GATEWAY_WS_HOST" ] && [ -d "${NEMOCLAW_SANDBOX_ROOT:-/sandbox}" ]; then
+  _GATEWAY_WS_HOST="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+fi
+if [ -z "$_GATEWAY_WS_HOST" ]; then
+  _GATEWAY_WS_HOST="127.0.0.1"
+fi
+export OPENCLAW_GATEWAY_URL="ws://${_GATEWAY_WS_HOST}:${_DASHBOARD_PORT}"
+if [ "$_GATEWAY_WS_HOST" != "127.0.0.1" ]; then
+  # The OpenClaw client refuses plaintext ws:// to non-loopback private
+  # addresses unless this break-glass is set. The sandbox bridge is a
+  # host-local veth pair — frames never leave the machine — and the
+  # alternative (loopback) is unconditionally blocked by the L7 proxy,
+  # which breaks sessions_spawn entirely.
+  export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1
+fi
 OPENCLAW="$(command -v openclaw)" # Resolve once, use absolute path everywhere
 _SANDBOX_HOME="/sandbox"          # Home dir for the sandbox user (useradd -d /sandbox in Dockerfile.base)
 _OPENCLAW_STATE_DIR="${_SANDBOX_HOME}/.openclaw"
@@ -2226,6 +2267,11 @@ PROXYEOF
       _escaped_gateway_token="$(printf '%s' "$OPENCLAW_GATEWAY_TOKEN" | sed "s/'/'\\\\''/g")"
       printf "export OPENCLAW_GATEWAY_TOKEN='%s'\n" "$_escaped_gateway_token"
     fi
+    if [ -n "${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}" ]; then
+      # Mirrors the gateway-process export above so connect-shell CLI
+      # clients accept the plaintext eth0 ws:// gateway URL too.
+      printf "export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS='1'\n"
+    fi
     cat <<'GUARDENVEOF'
 # nemoclaw-configure-guard begin
 # #4538: a raw in-sandbox `openclaw doctor --fix` (run directly from a connect
@@ -2260,6 +2306,12 @@ _nemoclaw_restore_mutable_config_perms() {
   chmod -R g+rwX,o-rwx "$_nemoclaw_oc_dir" 2>/dev/null || true
   find "$_nemoclaw_oc_dir" -type d -exec chmod g+s {} + 2>/dev/null || true
   chmod 2770 "$_nemoclaw_oc_dir" 2>/dev/null || true
+  if [ ! -L "$_nemoclaw_oc_dir" ] &&
+    [ ! -L "$_nemoclaw_oc_dir/openclaw.json" ] &&
+    [ ! -L "$_nemoclaw_oc_dir/.config-hash" ] &&
+    [ -f "$_nemoclaw_oc_dir/openclaw.json" ]; then
+    (cd "$_nemoclaw_oc_dir" && sha256sum openclaw.json >.config-hash) 2>/dev/null || true
+  fi
   chmod 660 "$_nemoclaw_oc_dir/openclaw.json" "$_nemoclaw_oc_dir/.config-hash" 2>/dev/null || true
   # Keep the recovery baseline out of the group-writable contract — it is a
   # read-only trust anchor (root:sandbox 0440 when root re-locks it). The
@@ -3396,6 +3448,7 @@ if [ "$(id -u)" -ne 0 ]; then
   mark_in_container_gateway
   nohup "$OPENCLAW" gateway run --port "${_DASHBOARD_PORT}" >/tmp/gateway.log 2>&1 &
   GATEWAY_PID=$!
+  record_gateway_pid "$GATEWAY_PID"
   echo "[gateway] openclaw gateway launched (pid $GATEWAY_PID)" >&2
   # Diagnostic: mirror gateway log to PID 1's stderr — see root-mode block
   # below for rationale (NVIDIA/NemoClaw#2484).
@@ -3449,6 +3502,7 @@ if [ "$(id -u)" -ne 0 ]; then
     sleep 2
     nohup "$OPENCLAW" gateway run --port "${_DASHBOARD_PORT}" >>/tmp/gateway.log 2>&1 &
     GATEWAY_PID=$!
+    record_gateway_pid "$GATEWAY_PID"
     # shellcheck disable=SC2034  # read by cleanup_on_signal from sandbox-init.sh
     SANDBOX_WAIT_PID="$GATEWAY_PID"
     SANDBOX_CHILD_PIDS+=("$GATEWAY_PID")
@@ -3621,6 +3675,7 @@ validate_tmp_permissions "$_SANDBOX_SAFETY_NET" "$_PROXY_FIX_SCRIPT" "$_NEMOTRON
 mark_in_container_gateway
 nohup "${STEP_DOWN_PREFIX_GATEWAY[@]}" "$OPENCLAW" gateway run --port "${_DASHBOARD_PORT}" >/tmp/gateway.log 2>&1 &
 GATEWAY_PID=$!
+record_gateway_pid "$GATEWAY_PID"
 echo "[gateway] openclaw gateway launched as 'gateway' user (pid $GATEWAY_PID)" >&2
 
 # Diagnostic: mirror gateway log to PID 1's stderr so its content surfaces in
@@ -3706,6 +3761,7 @@ while :; do
   sleep 2
   nohup "${STEP_DOWN_PREFIX_GATEWAY[@]}" "$OPENCLAW" gateway run --port "${_DASHBOARD_PORT}" >>/tmp/gateway.log 2>&1 &
   GATEWAY_PID=$!
+  record_gateway_pid "$GATEWAY_PID"
   # shellcheck disable=SC2034  # read by cleanup_on_signal from sandbox-init.sh
   SANDBOX_WAIT_PID="$GATEWAY_PID"
   SANDBOX_CHILD_PIDS+=("$GATEWAY_PID")

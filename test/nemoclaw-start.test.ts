@@ -2309,7 +2309,7 @@ describe("nemoclaw-start gateway launch signal handling", () => {
         "start_persistent_gateway_log_mirror() { sleep 30 & GATEWAY_LOG_PERSIST_PID=$!; }",
         "start_auto_pair() { sleep 30 & AUTO_PAIR_PID=$!; }",
         "start_plugin_registry_refresh() { :; }",
-        "cleanup_on_signal() { :; }",
+        "cleanup_on_signal() { :; }; record_gateway_pid() { :; }", // record_gateway_pid: #4952
         extractShellFunctionFromSource(src, "mark_in_container_gateway").replaceAll(
           "/tmp/nemoclaw-gateway-local",
           markerPath,
