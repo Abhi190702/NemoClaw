@@ -432,7 +432,7 @@ The exit code is the remote command's exit code.
 
 | Flag | Description |
 |------|-------------|
-| `--workdir <dir>` | Working directory inside the sandbox |
+| `--workdir <dir>` | Working directory inside the sandbox. The directory is checked before the command runs; if it does not exist, NemoClaw reports `error: --workdir: <dir> does not exist inside the sandbox` and exits with status `1` without invoking the inner command. |
 | `--tty` / `--no-tty` | Allocate a pseudo-terminal; defaults to auto-detection (on when stdin and stdout are terminals) |
 | `--timeout <seconds>` | Timeout in seconds (`0` means no timeout) |
 
@@ -500,6 +500,11 @@ If the gateway is already running, the command exits zero with a probe message a
 ```bash
 nemohermes my-assistant recover
 ```
+
+`recover` re-evaluates the documented Hermes secret boundary against `/sandbox/.hermes/.env` on every run, including when the gateway is already healthy.
+If the file contains raw secret-shaped values (for example a pasted Telegram, Discord, or Slack bot token in place of the expected `openshell:resolve:env:<name>` placeholder), the command stops the running gateway, exits non-zero, and prints the offending key.
+Replace each flagged value with the `openshell:resolve:env:<name>` placeholder and re-run.
+Older Hermes sandbox images that predate the standalone validator are detected and left untouched: `recover` prints a `[boundary]` warning naming the sandbox and noting that `/sandbox/.hermes/.env` was not re-evaluated, then proceeds with the rest of the recovery path rather than blocking the gateway. Re-image the sandbox to a current Hermes build to enable the per-run boundary re-evaluation described above.
 
 ### `nemohermes <name> status`
 
@@ -617,7 +622,7 @@ nemohermes my-assistant exec [--workdir <dir>] [--tty|--no-tty] [--timeout <s>] 
 
 | Flag | Description |
 |------|-------------|
-| `--workdir <dir>` | Set the working directory inside the sandbox |
+| `--workdir <dir>` | Set the working directory inside the sandbox. The directory is checked before the command runs; if it does not exist, NemoClaw reports `error: --workdir: <dir> does not exist inside the sandbox` and exits with status `1` without invoking the inner command. |
 | `--tty`, `--no-tty` | Allocate or disable a pseudo-terminal; defaults to auto-detection |
 | `--timeout <s>` | Timeout in seconds. Use `0` for no timeout |
 
@@ -1125,7 +1130,8 @@ Session JSONL can contain pasted secrets (API keys, tokens), so exported files a
 ### `nemohermes <name> download <sandbox-path> [host-dest]`
 
 Host-side wrapper around `openshell sandbox download` that adds a live-sandbox readiness check.
-The source path inside the sandbox and the host destination are forwarded to OpenShell verbatim, so the file-system semantics (single-file vs directory copy, trailing-slash handling, overwrite behaviour) follow the OpenShell transport.
+The sandbox source path is forwarded to OpenShell verbatim; a relative host destination is resolved against the caller's working directory before it reaches OpenShell, so the downloaded file lands where the user invoked the CLI from rather than inside the install directory.
+Absolute host destinations pass through unchanged, and the OpenShell transport keeps its file-system semantics (single-file vs directory copy, trailing-slash handling, overwrite behaviour).
 With no `host-dest` the destination defaults to the current directory.
 
 ```bash

@@ -9,7 +9,7 @@
 //
 // Main inputs:
 //   CHAT_UI_URL, NEMOCLAW_DASHBOARD_PORT, NEMOCLAW_MODEL,
-//   NEMOCLAW_PROVIDER_KEY, NEMOCLAW_PRIMARY_MODEL_REF,
+//   NEMOCLAW_PROVIDER_KEY, NEMOCLAW_UPSTREAM_PROVIDER, NEMOCLAW_PRIMARY_MODEL_REF,
 //   NEMOCLAW_INFERENCE_BASE_URL, NEMOCLAW_INFERENCE_API,
 //   NEMOCLAW_INFERENCE_INPUTS, NEMOCLAW_CONTEXT_WINDOW,
 //   NEMOCLAW_MAX_TOKENS, NEMOCLAW_REASONING,
@@ -45,6 +45,32 @@ const MODEL_SETUP_EFFECT_KEYS: Record<string, Set<string>> = {
 const DEFAULT_DASHBOARD_PORT = 18789;
 const MIN_DASHBOARD_PORT = 1024;
 const MAX_DASHBOARD_PORT = 65535;
+
+// Local Ollama small-context compaction policy (NemoClaw #5468).
+//
+// OpenClaw 2026.5.x auto-compaction reserves `reserveTokensFloor` tokens at the
+// tail of the context window for reply generation (default 20_000, see the
+// pinned openclaw package's pi-settings), then clamps that reserve so at least
+// OPENCLAW_MIN_PROMPT_BUDGET_TOKENS (8_000) of the window stays available for
+// prompt content. NemoClaw floors a Local Ollama runtime window to 16_384
+// (ollama-runtime-context.ts), so the default 20k reserve is clamped down and
+// the prompt budget is pinned at ~8k — too small for OpenClaw's base prompt +
+// tool catalogue (~7.4k tokens). The first user turn overflows and preemptive
+// compaction, with no prior history to compact, fails with
+// "Auto-compaction could not recover this turn".
+//
+// Below SMALL_OLLAMA_CONTEXT_THRESHOLD we lower both reserveTokens and
+// reserveTokensFloor to the model's own reply budget (maxTokens) so the prompt
+// budget becomes `contextWindow - reserve` and the first turn fits. Above the
+// threshold OpenClaw's default reserve already leaves an ample prompt budget, so
+// its safeguard is left untouched. Both keys must be set: OpenClaw applies
+// max(reserveTokens, reserveTokensFloor), so lowering the floor alone would let
+// the 20k default pull the reserve back up.
+const OPENCLAW_DEFAULT_RESERVE_TOKENS_FLOOR = 20_000;
+const OPENCLAW_MIN_PROMPT_BUDGET_TOKENS = 8_000;
+const SMALL_OLLAMA_CONTEXT_THRESHOLD =
+  OPENCLAW_DEFAULT_RESERVE_TOKENS_FLOOR + OPENCLAW_MIN_PROMPT_BUDGET_TOKENS;
+const LOCAL_OLLAMA_UPSTREAM_PROVIDER = "ollama-local";
 const FALSE_VALUES = new Set(["0", "false", "no", "off"]);
 const DEFAULT_OPENCLAW_OTEL_ENDPOINT = "http://host.openshell.internal:4318";
 const DEFAULT_OPENCLAW_OTEL_SERVICE_NAME = "openclaw-gateway";
@@ -945,6 +971,27 @@ function decodeJsonEnv(env: Env, name: string, defaultValue: string): any {
   return JSON.parse(Buffer.from(raw, "base64").toString("utf-8"));
 }
 
+// Build the agents.defaults.compaction override for a Local Ollama small-context
+// window, or undefined when it does not apply. See the policy constants above.
+export function buildLocalOllamaSmallContextCompaction(
+  upstreamProvider: string | undefined,
+  contextWindow: number,
+  maxTokens: number,
+): JsonObject | undefined {
+  if ((upstreamProvider || "").trim() !== LOCAL_OLLAMA_UPSTREAM_PROVIDER) {
+    return undefined;
+  }
+  if (!Number.isFinite(contextWindow) || contextWindow > SMALL_OLLAMA_CONTEXT_THRESHOLD) {
+    return undefined;
+  }
+  // Reserve the model's reply budget, but never so much that the remaining
+  // prompt budget drops below OpenClaw's own minimum — mirrors OpenClaw's clamp
+  // so a pathological maxTokens cannot make the window worse than the default.
+  const maxReserve = Math.max(0, contextWindow - OPENCLAW_MIN_PROMPT_BUDGET_TOKENS);
+  const reserveTokens = Math.max(0, Math.min(maxTokens, maxReserve));
+  return { reserveTokens, reserveTokensFloor: reserveTokens };
+}
+
 export function buildConfig(env: Env = process.env): JsonObject {
   const proxyHost = env.NEMOCLAW_PROXY_HOST || "10.200.0.1";
   const proxyPort = env.NEMOCLAW_PROXY_PORT || "3128";
@@ -1155,6 +1202,15 @@ export function buildConfig(env: Env = process.env): JsonObject {
     agentDefaults.subagents = extraAgentsPayload.defaults.subagents;
   }
 
+  const smallOllamaCompaction = buildLocalOllamaSmallContextCompaction(
+    env.NEMOCLAW_UPSTREAM_PROVIDER,
+    contextWindow,
+    maxTokens,
+  );
+  if (smallOllamaCompaction) {
+    agentDefaults.compaction = smallOllamaCompaction;
+  }
+
   const config: JsonObject = {
     agents: {
       defaults: agentDefaults,
@@ -1175,6 +1231,19 @@ export function buildConfig(env: Env = process.env): JsonObject {
       },
       trustedProxies: ["127.0.0.1", "::1"],
       auth: { token: "" },
+      // Restart-class config changes (plugins.installs, models.pricing,
+      // unrecognized keys, ...) must not let the gateway SIGUSR1-restart
+      // itself: in containers the in-process restart path can fail and park
+      // the process alive with no HTTP listener, which the PID-wait respawn
+      // loop in nemoclaw-start.sh cannot observe (#4710). Hot mode makes the
+      // gateway ignore plan-driven restarts; NemoClaw applies restart-class
+      // changes through sandbox rebuild or `nemoclaw <name> recover` instead.
+      // Removal condition (also for the serving watchdog in
+      // nemoclaw-start.sh): once the pinned OpenClaw release exits non-zero
+      // when a failed in-process restart cannot re-bind its listener — so the
+      // respawn loop sees the death — this pin can revert to the default
+      // reload mode after a wedge drill proves no regression.
+      reload: { mode: "hot" },
     },
   };
 
