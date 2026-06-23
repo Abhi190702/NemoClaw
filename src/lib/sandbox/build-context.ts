@@ -169,6 +169,11 @@ function stageOptimizedSandboxBuildContext(
     path.join(rootDir, "scripts", "patch-openclaw-chat-send.js"),
     path.join(stagedScriptsDir, "patch-openclaw-chat-send.js"),
   );
+  // Dockerfile copies this OpenClaw MCP patch into the optimized build context.
+  fs.copyFileSync(
+    path.join(rootDir, "scripts", "patch-openclaw-mcp-npx.mts"),
+    path.join(stagedScriptsDir, "patch-openclaw-mcp-npx.mts"),
+  );
 
   return { buildCtx, stagedDockerfile };
 }

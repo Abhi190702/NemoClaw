@@ -100,8 +100,10 @@ ENV NPM_CONFIG_AUDIT=false \
 RUN npm ci --omit=dev
 COPY scripts/patch-openclaw-tool-catalog.js /usr/local/lib/nemoclaw/patch-openclaw-tool-catalog.js
 COPY scripts/patch-openclaw-chat-send.js /usr/local/lib/nemoclaw/patch-openclaw-chat-send.js
+COPY scripts/patch-openclaw-mcp-npx.mts /usr/local/lib/nemoclaw/patch-openclaw-mcp-npx.mts
 RUN chmod 755 /usr/local/lib/nemoclaw/patch-openclaw-tool-catalog.js \
-        /usr/local/lib/nemoclaw/patch-openclaw-chat-send.js
+        /usr/local/lib/nemoclaw/patch-openclaw-chat-send.js \
+        /usr/local/lib/nemoclaw/patch-openclaw-mcp-npx.mts
 
 # Upgrade OpenClaw if the base image is stale.
 #
@@ -510,6 +512,16 @@ RUN set -eu; \
 # and openclaw/openclaw#50298, or when NemoClaw no longer ships OpenClaw 2026.5.x.
 # hadolint ignore=DL3059
 RUN node /usr/local/lib/nemoclaw/patch-openclaw-chat-send.js \
+    /usr/local/lib/node_modules/openclaw/dist
+
+# Patch OpenClaw's MCP stdio launcher so npx-backed MCP servers run with -y.
+# Without this, npx can prompt on cold package resolution and consume the MCP
+# JSON-RPC stdin pipe, causing the initialize handshake to time out.
+#
+# Removal criteria: drop when upstream OpenClaw normalizes npx MCP server args
+# and emits actionable MCP startup timeout diagnostics.
+# hadolint ignore=DL3059
+RUN node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-mcp-npx.mts \
     /usr/local/lib/node_modules/openclaw/dist
 
 # Patch OpenClaw's pinned 2026.5.27 compiled selection runtime to expose a
