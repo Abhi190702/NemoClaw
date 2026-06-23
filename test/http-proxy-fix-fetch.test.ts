@@ -63,21 +63,21 @@ function readableResponse(body: string): http.IncomingMessage {
   return res;
 }
 
+function bufferFromChunk(chunk: unknown, encoding?: BufferEncoding | (() => void)) {
+  return chunk == null || typeof chunk === "function"
+    ? null
+    : typeof chunk === "string"
+      ? Buffer.from(chunk, typeof encoding === "string" ? encoding : undefined)
+      : chunk instanceof ArrayBuffer
+        ? Buffer.from(chunk)
+        : ArrayBuffer.isView(chunk)
+          ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+          : Buffer.from(String(chunk));
+}
+
 function addChunk(chunks: Buffer[], chunk: unknown, encoding?: BufferEncoding | (() => void)) {
-  if (chunk == null || typeof chunk === "function") return;
-  if (typeof chunk === "string") {
-    chunks.push(Buffer.from(chunk, typeof encoding === "string" ? encoding : undefined));
-    return;
-  }
-  if (chunk instanceof ArrayBuffer) {
-    chunks.push(Buffer.from(chunk));
-    return;
-  }
-  if (ArrayBuffer.isView(chunk)) {
-    chunks.push(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
-    return;
-  }
-  chunks.push(Buffer.from(String(chunk)));
+  const buffer = bufferFromChunk(chunk, encoding);
+  buffer === null || chunks.push(buffer);
 }
 
 describe("http-proxy-fix fetch routing for inference.local (#4730)", () => {
@@ -111,7 +111,7 @@ describe("http-proxy-fix fetch routing for inference.local (#4730)", () => {
         req.write = (chunk, encoding, cb) => {
           addChunk(chunks, chunk, encoding);
           const done = typeof encoding === "function" ? encoding : cb;
-          if (done) done();
+          done?.();
           return true;
         };
         req.end = (chunk, encoding, cb) => {
@@ -119,7 +119,7 @@ describe("http-proxy-fix fetch routing for inference.local (#4730)", () => {
           capturedBody = Buffer.concat(chunks).toString("utf-8");
           const done =
             typeof chunk === "function" ? chunk : typeof encoding === "function" ? encoding : cb;
-          if (done) done();
+          done?.();
           process.nextTick(() => callback?.(readableResponse('{"ok":true}')));
           return req;
         };

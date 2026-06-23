@@ -16,31 +16,43 @@ function tryUsableBash(): { ok: true } | { ok: false; reason: string } {
     encoding: "utf-8",
     timeout: 5000,
   });
-  if (result.status === 0 && result.stdout === "ok") {
-    return { ok: true };
-  }
-  return {
-    ok: false,
-    reason: (
-      result.error?.message ||
-      result.stderr ||
-      result.stdout ||
-      `bash exited with status ${result.status}`
-    ).replace(/\0/g, ""),
-  };
+  const reason = (
+    result.error?.message ||
+    result.stderr ||
+    result.stdout ||
+    `bash exited with status ${result.status}`
+  ).replace(/\0/g, "");
+  return result.status === 0 && result.stdout === "ok" ? { ok: true } : { ok: false, reason };
+}
+
+function missingBashReason(setup: { ok: true } | { ok: false; reason: string }) {
+  return setup.ok ? "" : setup.reason;
+}
+
+function failMissingBash(reason: string): never {
+  throw new Error(
+    `[http-proxy-fix-sync] CI=true but bash unavailable: ${reason}. ` +
+      "This test must not silently skip in CI.",
+  );
+}
+
+function warnMissingBash(reason: string) {
+  console.warn(`[http-proxy-fix-sync] skipping locally: ${reason}`);
+  return true;
+}
+
+function enforceBashAvailability(setup: { ok: true } | { ok: false; reason: string }) {
+  return (
+    setup.ok ||
+    (process.env.CI === "true"
+      ? failMissingBash(missingBashReason(setup))
+      : warnMissingBash(missingBashReason(setup)))
+  );
 }
 
 const bashSetup = tryUsableBash();
 const bashAvailable = bashSetup.ok;
-if (!bashSetup.ok) {
-  if (process.env.CI === "true") {
-    throw new Error(
-      `[http-proxy-fix-sync] CI=true but bash unavailable: ${bashSetup.reason}. ` +
-        "This test must not silently skip in CI.",
-    );
-  }
-  console.warn(`[http-proxy-fix-sync] skipping locally: ${bashSetup.reason}`);
-}
+enforceBashAvailability(bashSetup);
 
 describe("http-proxy-fix preload sync (#2109)", () => {
   it.skipIf(!bashAvailable)(
@@ -52,9 +64,9 @@ describe("http-proxy-fix preload sync (#2109)", () => {
         "# NVIDIA endpoint model-specific inference parameter injection",
         start,
       );
-      if (start === -1 || end === -1 || end <= start) {
-        throw new Error("Expected HTTP proxy fix entrypoint block in scripts/nemoclaw-start.sh");
-      }
+      expect(start).not.toBe(-1);
+      expect(end).not.toBe(-1);
+      expect(end).toBeGreaterThan(start);
 
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-http-proxy-fix-"));
       const fixPath = path.join(tempDir, "http-proxy-fix.js");
