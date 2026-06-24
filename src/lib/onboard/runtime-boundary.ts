@@ -22,8 +22,6 @@ function assertSkippableTransitionResult(result: OnboardStateResult): void {
   throw new Error("Cannot skip onboarding state result with context updates");
 }
 
-const RECORD_ONLY_STEP_MUTATION_OPTIONS: StepMutationOptions = { updateMachine: false };
-
 export interface OnboardRuntimeBoundaryOptions {
   toSessionUpdates(updates: Record<string, unknown>): SessionUpdates;
   maybeForceE2eStepFailure(stepName: string): void;
