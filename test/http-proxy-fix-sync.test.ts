@@ -64,9 +64,9 @@ describe("http-proxy-fix preload sync (#2109)", () => {
         "# NVIDIA endpoint model-specific inference parameter injection",
         start,
       );
-      expect(start).not.toBe(-1);
-      expect(end).not.toBe(-1);
-      expect(end).toBeGreaterThan(start);
+      if (start === -1 || end === -1 || end <= start) {
+        throw new Error("Expected HTTP proxy fix entrypoint block in scripts/nemoclaw-start.sh");
+      }
 
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-http-proxy-fix-"));
       const fixPath = path.join(tempDir, "http-proxy-fix.js");
