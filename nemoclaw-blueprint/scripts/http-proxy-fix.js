@@ -143,6 +143,90 @@
     }
   }
 
+  // Maximum request body size for inference.local fetch bridging. Provider
+  // preflight payloads are small JSON (model listing, health checks); 1 MiB
+  // is generous while preventing accidental full-dataset buffering.
+  var MAX_INFERENCE_LOCAL_FETCH_BODY_BYTES = 1024 * 1024;
+
+  function contentLengthValue(headers) {
+    for (var key in headers) {
+      if (
+        Object.prototype.hasOwnProperty.call(headers, key) &&
+        String(key).toLowerCase() === 'content-length'
+      ) {
+        return headers[key];
+      }
+    }
+    return undefined;
+  }
+
+  // Returns { body: Buffer|null } or throws with a descriptive message.
+  // GET/HEAD requests never have bodies. Non-GET/HEAD requests with a
+  // Content-Length exceeding the limit are rejected before materialization.
+  // Bodies that fail to materialize (streaming/duplex) or exceed the limit
+  // after materialization are also rejected.
+  async function boundedRequestBody(request, headers) {
+    var method = request.method || 'GET';
+    if (method === 'GET' || method === 'HEAD') return { body: null };
+
+    // Fast-reject oversized bodies from Content-Length before buffering.
+    var declaredLength = contentLengthValue(headers);
+    if (declaredLength !== undefined) {
+      var parsed = Number(declaredLength);
+      var isInvalid = !Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 0;
+      if (!isInvalid && typeof declaredLength === 'string') {
+        var trimmed = declaredLength.trim();
+        if (!/^\d+$/.test(trimmed)) {
+          isInvalid = true;
+        }
+      }
+      if (isInvalid) {
+        throw new Error(
+          'inference.local fetch body rejected: invalid Content-Length'
+        );
+      }
+      if (parsed > MAX_INFERENCE_LOCAL_FETCH_BODY_BYTES) {
+        throw new Error(
+          'inference.local fetch body rejected: Content-Length ' +
+            parsed +
+            ' exceeds limit of ' +
+            MAX_INFERENCE_LOCAL_FETCH_BODY_BYTES +
+            ' bytes'
+        );
+      }
+    }
+
+    if (request.body === null) return { body: null };
+
+    // Materialize body with error handling for streaming/duplex bodies.
+    var arrayBuffer;
+    try {
+      arrayBuffer = await request.clone().arrayBuffer();
+    } catch (err) {
+      throw new Error(
+        'inference.local fetch body rejected: failed to buffer request body' +
+          (err && err.message ? ' (' + err.message + ')' : '')
+      );
+    }
+
+    var body = Buffer.from(arrayBuffer);
+    if (body.length > MAX_INFERENCE_LOCAL_FETCH_BODY_BYTES) {
+      throw new Error(
+        'inference.local fetch body rejected: materialized body ' +
+          body.length +
+          ' bytes exceeds limit of ' +
+          MAX_INFERENCE_LOCAL_FETCH_BODY_BYTES +
+          ' bytes'
+      );
+    }
+
+    // Set content-length if body exists and header is absent.
+    if (body.length > 0 && declaredLength === undefined) {
+      headers['content-length'] = String(body.length);
+    }
+    return { body: body.length > 0 ? body : null };
+  }
+
   function requestHeaders(request) {
     var out = {};
     request.headers.forEach(function (value, key) {
@@ -194,16 +278,8 @@
 
     var method = request.method || 'GET';
     var headers = requestHeaders(request);
-    var body = null;
-    if (method !== 'GET' && method !== 'HEAD') {
-      body = Buffer.from(await request.clone().arrayBuffer());
-      if (
-        body.length > 0 &&
-        !Object.prototype.hasOwnProperty.call(headers, 'content-length')
-      ) {
-        headers['content-length'] = String(body.length);
-      }
-    }
+    var bounded = await boundedRequestBody(request, headers);
+    var body = bounded.body;
 
     return new Promise(function (resolve, reject) {
       var req = http.request(
@@ -233,20 +309,47 @@
   }
 
   /**
-   * NemoClaw#4730: OpenClaw 2026.5.27 cron provider preflight reaches the
-   * managed provider base URL through fetch()/undici instead of http.request().
-   * Native fetch bypasses the FORWARD-mode rewrite above, so it can attempt
-   * raw DNS for the sandbox-only inference.local host and skip cron agentTurn
-   * runs before normal model calls get a chance to use the proxy-aware path.
+   * NemoClaw#4730 — inference.local fetch shim.
    *
-   * This shim is intentionally narrow: only https://inference.local/* is
-   * converted into the existing proxy path. Other fetches keep their original
-   * transport, and the shim does not hardcode Ollama or modify NO_PROXY.
+   * Invalid state:
+   *   OpenClaw cron/provider preflight calls native fetch() for
+   *   https://inference.local/v1, which triggers a raw DNS lookup and
+   *   fails with getaddrinfo EAI_AGAIN because inference.local is a
+   *   sandbox-only virtual hostname routed through the OpenShell proxy.
+   *
+   * Source boundary:
+   *   The failing call path is OpenClaw cron/provider preflight; this file
+   *   is the sandbox preload transport boundary (loaded via
+   *   NODE_OPTIONS=--require at sandbox boot).
+   *
+   * Why localized preload fix:
+   *   This preload is the controlled boundary available in this repo/version.
+   *   The cron/provider preflight path may be generated, external, or
+   *   version-coupled, so the localized preload keeps inference.local fetch
+   *   inside the existing proxy rewrite boundary.
+   *
+   * Regression proof:
+   *   test/http-proxy-fix-fetch.test.ts proves inference.local fetches use
+   *   the preload/proxy path instead of native fetch, including body limits,
+   *   header stripping, idempotence, and explicit port/path/query.
+   *
+   * Removal condition:
+   *   Remove this shim when OpenClaw cron/provider preflight uses the
+   *   sandbox proxy-aware provider route directly, or after upgrading to
+   *   an OpenClaw version that no longer uses raw native fetch for
+   *   inference.local.
    */
+
+  function isNemoClawFetchWrapper(fetchFn) {
+    return !!(fetchFn && fetchFn.__nemoclawInferenceLocalProxyFix === true);
+  }
+
   function wrapFetchForInferenceLocal() {
     if (typeof globalThis.fetch !== 'function') return;
-    if (globalThis.__nemoclawFetchPatched) return;
-    globalThis.__nemoclawFetchPatched = true;
+    // Check whether globalThis.fetch is already the NemoClaw wrapper.
+    // Do not trust the mutable boolean alone — a stale or colliding
+    // __nemoclawFetchPatched flag must not silently disable the patch.
+    if (isNemoClawFetchWrapper(globalThis.fetch)) return;
 
     var _originalFetch = globalThis.fetch.bind(globalThis);
     var wrappedFetch = async function (input, init) {
@@ -257,6 +360,8 @@
     };
     wrappedFetch.__nemoclawInferenceLocalProxyFix = true;
     globalThis.fetch = wrappedFetch;
+    // Keep backward-compatible flag for any external code checking it.
+    globalThis.__nemoclawFetchPatched = true;
   }
 
   http.request = function (options, callback) {
