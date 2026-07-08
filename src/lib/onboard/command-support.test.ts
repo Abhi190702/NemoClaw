@@ -16,7 +16,7 @@ describe("buildOnboardFlags --agent help (#5779)", () => {
     const flags = buildOnboardFlags();
 
     expect(flags.agent.description).toBe(
-      "Agent runtime to onboard (openclaw, hermes, langchain-deepagents-code)",
+      "Agent runtime to onboard (openclaw, hermes, langchain-deepagents-code; aliases: nemohermes → hermes; nemo-deepagents/dcode/deepagents/deepagents-code/langchain → langchain-deepagents-code)",
     );
   });
 
@@ -28,5 +28,16 @@ describe("buildOnboardFlags --agent help (#5779)", () => {
     const flags = buildOnboardFlags();
 
     expect(flags.agent.description).toBe("Agent runtime to onboard");
+  });
+});
+
+describe("buildOnboardFlags --observability help", () => {
+  it("discloses the bounded content exported by the opt-in", () => {
+    const flags = buildOnboardFlags();
+
+    expect(flags.observability.description).toBe(
+      "Export bounded prompt, response, tool argument, and tool result content to a local OTLP collector (Deep Agents Code only)",
+    );
+    expect(flags.observability.allowNo).toBe(true);
   });
 });

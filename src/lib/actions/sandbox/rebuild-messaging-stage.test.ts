@@ -6,29 +6,13 @@
 // channel manifests, so a non-messaging sandbox rebuild cannot
 // carry messaging-plan state into the Dockerfile patch step.
 //
-// Loaded from dist/ to match the rest of the rebuild test suite (runner.ts
-// loads './platform' via runtime CommonJS `require()` that vitest cannot
-// resolve from a TS source file). Run `npm run build:cli` first.
-
-import { createRequire } from "node:module";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const requireDist = createRequire(import.meta.url);
-const D = (p: string) => requireDist(`../../../../dist/lib/${p}`);
-
-const defs = D("agent/defs.js");
-const messaging = D("messaging/index.js") as {
-  MessagingSetupApplier: { clearPlanEnv: () => void; writePlanToEnv: (plan: unknown) => void };
-};
-const { stageMessagingManifestPlanForRebuild } = D("actions/sandbox/rebuild.js") as {
-  stageMessagingManifestPlanForRebuild: (
-    sandboxName: string,
-    sandboxEntry: unknown,
-    rebuildAgent: string | null,
-    log: (msg: string) => void,
-  ) => Promise<unknown>;
-};
+import * as defs from "../../agent/defs";
+import { MessagingSetupApplier } from "../../messaging/applier/setup-applier";
+import type { SandboxMessagingPlan } from "../../messaging/manifest";
+import type { SandboxEntry } from "../../state/registry";
+import { stageMessagingManifestPlanForRebuild } from "./rebuild-messaging-stage";
 
 const emptyStoredMessagingPlan = {
   schemaVersion: 1,
@@ -43,7 +27,7 @@ const emptyStoredMessagingPlan = {
   buildSteps: [],
   stateUpdates: [],
   healthChecks: [],
-};
+} satisfies SandboxMessagingPlan;
 
 describe("stageMessagingManifestPlanForRebuild non-messaging agent guard", () => {
   afterEach(() => {
@@ -51,10 +35,10 @@ describe("stageMessagingManifestPlanForRebuild non-messaging agent guard", () =>
   });
 
   it("emits the skip message for any agent whose name is not supported by channel manifests", async () => {
-    const loadAgentSpy = vi.spyOn(defs, "loadAgent").mockReturnValue({
-      name: "future-non-messaging-agent",
-    });
-    const clearPlanEnvSpy = vi.spyOn(messaging.MessagingSetupApplier, "clearPlanEnv");
+    const loadAgentSpy = vi
+      .spyOn(defs, "loadAgent")
+      .mockReturnValue({ name: "future-non-messaging-agent" } as never);
+    const clearPlanEnvSpy = vi.spyOn(MessagingSetupApplier, "clearPlanEnv");
 
     const messages: string[] = [];
     const result = await stageMessagingManifestPlanForRebuild(
@@ -74,12 +58,10 @@ describe("stageMessagingManifestPlanForRebuild non-messaging agent guard", () =>
   });
 
   it("stages an explicit empty rebuild plan so token-backed channels are not rediscovered", async () => {
-    vi.spyOn(defs, "loadAgent").mockReturnValue({
-      name: "openclaw",
-    });
-    const clearPlanEnvSpy = vi.spyOn(messaging.MessagingSetupApplier, "clearPlanEnv");
+    vi.spyOn(defs, "loadAgent").mockReturnValue({ name: "openclaw" } as never);
+    const clearPlanEnvSpy = vi.spyOn(MessagingSetupApplier, "clearPlanEnv");
     const writePlanEnvSpy = vi
-      .spyOn(messaging.MessagingSetupApplier, "writePlanToEnv")
+      .spyOn(MessagingSetupApplier, "writePlanToEnv")
       .mockImplementation(() => undefined);
 
     const messages: string[] = [];
@@ -105,11 +87,9 @@ describe("stageMessagingManifestPlanForRebuild non-messaging agent guard", () =>
   });
 
   it("stages a plan for a known agent using channel-manifest supported channels", async () => {
-    vi.spyOn(defs, "loadAgent").mockReturnValue({
-      name: "openclaw",
-    });
-    const clearPlanEnvSpy = vi.spyOn(messaging.MessagingSetupApplier, "clearPlanEnv");
-    const writePlanEnvSpy = vi.spyOn(messaging.MessagingSetupApplier, "writePlanToEnv");
+    vi.spyOn(defs, "loadAgent").mockReturnValue({ name: "openclaw" } as never);
+    const clearPlanEnvSpy = vi.spyOn(MessagingSetupApplier, "clearPlanEnv");
+    const writePlanEnvSpy = vi.spyOn(MessagingSetupApplier, "writePlanToEnv");
 
     const sandboxEntryWithStoredPlan = {
       name: "openclaw-sandbox",
@@ -142,7 +122,7 @@ describe("stageMessagingManifestPlanForRebuild non-messaging agent guard", () =>
           healthChecks: [],
         },
       },
-    };
+    } satisfies SandboxEntry;
 
     const messages: string[] = [];
     const result = await stageMessagingManifestPlanForRebuild(

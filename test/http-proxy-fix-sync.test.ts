@@ -50,6 +50,16 @@ function enforceBashAvailability(setup: { ok: true } | { ok: false; reason: stri
   );
 }
 
+function extractShellFunction(source: string, name: string): string {
+  const header = `${name}() {`;
+  const start = source.indexOf(header);
+  expect(start, `expected ${name} in nemoclaw-start.sh`).not.toBe(-1);
+  const body = source.slice(start + header.length);
+  const closing = body.match(/^}$/m);
+  expect(closing, `expected closing brace for ${name}`).not.toBeNull();
+  return `${name}() {${body.slice(0, closing?.index ?? 0)}\n}`;
+}
+
 const bashSetup = tryUsableBash();
 const bashAvailable = bashSetup.ok;
 enforceBashAvailability(bashSetup);
@@ -64,9 +74,9 @@ describe("http-proxy-fix preload sync (#2109)", () => {
         "# NVIDIA endpoint model-specific inference parameter injection",
         start,
       );
-      if (start === -1 || end === -1 || end <= start) {
-        throw new Error("Expected HTTP proxy fix entrypoint block in scripts/nemoclaw-start.sh");
-      }
+      expect(start).not.toBe(-1);
+      expect(end).not.toBe(-1);
+      expect(end).toBeGreaterThan(start);
 
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-http-proxy-fix-"));
       const fixPath = path.join(tempDir, "http-proxy-fix.js");
@@ -86,7 +96,21 @@ describe("http-proxy-fix preload sync (#2109)", () => {
         'emit_sandbox_sourced_file() { local target="$1"; cat > "$target"; chmod 444 "$target"; }',
         "NODE_USE_ENV_PROXY=1",
         "NODE_OPTIONS='--require /already-loaded.js'",
+        extractShellFunction(startScript, "node_options_has_require"),
+        extractShellFunction(startScript, "append_node_require_once"),
         block,
+        `_SANDBOX_SAFETY_NET=${JSON.stringify(path.join(tempDir, "safety-net.js"))}`,
+        `_SANDBOX_SAFETY_NET_SOURCE=${JSON.stringify(CANONICAL_FIX)}`,
+        `_NEMOTRON_FIX_SCRIPT=${JSON.stringify(path.join(tempDir, "nemotron-fix.js"))}`,
+        `_NEMOTRON_FIX_SOURCE=${JSON.stringify(CANONICAL_FIX)}`,
+        `_CIAO_GUARD_SCRIPT=${JSON.stringify(path.join(tempDir, "ciao-guard.js"))}`,
+        `_CIAO_GUARD_SOURCE=${JSON.stringify(CANONICAL_FIX)}`,
+        `_WS_FIX_SCRIPT=${JSON.stringify(path.join(tempDir, "ws-fix.js"))}`,
+        `_WS_FIX_SOURCE=${JSON.stringify(path.join(tempDir, "missing-ws-source.js"))}`,
+        `_SECCOMP_GUARD_SCRIPT=${JSON.stringify(path.join(tempDir, "seccomp-guard.js"))}`,
+        `_SECCOMP_GUARD_SOURCE=${JSON.stringify(CANONICAL_FIX)}`,
+        extractShellFunction(startScript, "install_core_runtime_preloads"),
+        "install_core_runtime_preloads",
         "printf 'NODE_OPTIONS=%s\\n' \"$NODE_OPTIONS\"",
         "printf 'SCRIPT=%s\\n' \"$_PROXY_FIX_SCRIPT\"",
       ].join("\n");
