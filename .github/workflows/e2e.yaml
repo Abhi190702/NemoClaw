@@ -2987,6 +2987,34 @@ jobs:
           set -euo pipefail
           printf 'NEMOCLAW_TRACE_DIR=%s\n' "${RUNNER_TEMP}/nemoclaw-cloud-onboard-traces" >> "${GITHUB_ENV}"
 
+      # invalidState: the cloud-onboard DCode TUI check requires a PTY driver,
+      # but the fixed GitHub-hosted runner image does not provide expect.
+      # sourceBoundary: this trusted workflow owns host setup; the repository
+      # check only verifies and consumes expect without privilege.
+      # whyNotSourceFix: GitHub-hosted jobs cannot use a repository-owned host
+      # image, and caching privileged dpkg state between clean runners is not
+      # supported.
+      # regressionTest: workflow-boundary tests pin the ordering and exact
+      # one-package apt allowlist.
+      # removalCondition: remove when the hosted runner supplies expect or the
+      # cloud-onboard acceptance check no longer requires a PTY.
+      - name: Install cloud-onboard DCode TUI host dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if sudo apt-get update; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::apt-get update failed after 3 attempts." >&2
+              exit 1
+            fi
+            echo "::warning::apt-get update attempt ${attempt} failed; retrying." >&2
+            sleep $((attempt * 5))
+          done
+          sudo apt-get install -y --no-install-recommends expect
+
       - name: Prepare E2E workspace
         uses: NVIDIA/NemoClaw/.github/actions/prepare-e2e@50281ee84c4a6fc759da95ea28fc0b7d9c378a28
 

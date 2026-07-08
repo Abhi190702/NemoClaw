@@ -310,13 +310,36 @@ describe("P0-E cloud-experimental parity guardrails", () => {
   });
 
   it.each([
-    ["BLOCKED:policy denied", "ok", 0, /returns to the default Tavily denial/],
-    ["REACHED:403", "ok", 1, /did not restore the default Tavily denial/],
-    ["BLOCKED:policy denied", "fail", 1, /policy-remove tavily failed/],
-  ])("restores Tavily denial after opt-in (%s/%s)", (fixture, removeFixture, status, expected) => {
+    [
+      "BLOCKED:policy denied",
+      "ok",
+      "preserve",
+      0,
+      /returns to the default Tavily denial/,
+      /remains enabled/,
+    ],
+    [
+      "REACHED:403",
+      "ok",
+      "preserve",
+      1,
+      /did not restore the default Tavily denial/,
+      /remains enabled/,
+    ],
+    [
+      "BLOCKED:policy denied",
+      "fail",
+      "preserve",
+      1,
+      /policy-remove tavily failed/,
+      /remains enabled/,
+    ],
+    ["BLOCKED:policy denied", "ok", "lose", 1, /marker was lost/, /restored for ordered cleanup/],
+  ])("restores Tavily denial after opt-in (%s/%s/%s)", (fixture, removeFixture, markerFixture, status, expected, markerExpected) => {
     const result = spawnSync("bash", [dcodeTavilyCheck], {
       encoding: "utf8",
       env: {
+        NEMOCLAW_E2E_TAVILY_MARKER_FIXTURE: markerFixture,
         NEMOCLAW_E2E_TAVILY_PROBE_FIXTURE: fixture,
         NEMOCLAW_E2E_TAVILY_REMOVE_FIXTURE: removeFixture,
         NEMOCLAW_E2E_TAVILY_SELF_TEST: "restore-denial",
@@ -327,7 +350,7 @@ describe("P0-E cloud-experimental parity guardrails", () => {
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(status);
     expect(`${result.stdout}\n${result.stderr}`).toMatch(expected);
-    expect(result.stdout).toContain("managed observability state restores after policy-remove");
+    expect(result.stdout).toMatch(markerExpected);
   });
 
   it("keeps the managed DCode thread-auto-approval live check valid Bash (#6478)", () => {
