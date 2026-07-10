@@ -43,6 +43,27 @@ function writeMcpFixture(dist: string): string {
   return fixture;
 }
 
+function writeMcpTransportOnlyFixture(dist: string): string {
+  const fixture = path.join(dist, "chrome-mcp.fixture.js");
+  fs.writeFileSync(
+    fixture,
+    [
+      'import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";',
+      "",
+      "async function connectMcpServer(serverName, server) {",
+      "  const transport = new StdioClientTransport({",
+      "    command: server.command,",
+      "    args: server.args,",
+      "    env: server.env",
+      "  });",
+      "  return { serverName, transport };",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  return fixture;
+}
+
 function runPatch(dist: string) {
   return spawnSync(process.execPath, ["--experimental-strip-types", PATCH_SCRIPT, dist], {
     encoding: "utf-8",
@@ -166,16 +187,56 @@ describe("OpenClaw MCP npx normalization patch", () => {
     expect(second.text.match(/new NemoClawMcpStdioClientTransport/g)).toHaveLength(1);
   });
 
+  it("rewrites transport-only MCP bundles without timeout text", async () => {
+    const source = [
+      'import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";',
+      "",
+      "async function connectMcpServer(serverName, server) {",
+      "  const transport = new StdioClientTransport({",
+      "    command: server.command,",
+      "    args: server.args",
+      "  });",
+      "  return { serverName, transport };",
+      "}",
+      "",
+    ].join("\n");
+
+    const result = patchMcpTransportText(source, "chrome-mcp.fixture.js");
+    expect(result.patched).toBe(true);
+    expect(result.status).toBe("patched-no-timeout");
+    expect(result.text).toContain(MARKER);
+    expect(result.text).toContain("class NemoClawMcpStdioClientTransport");
+    expect(result.text).toContain("new NemoClawMcpStdioClientTransport({");
+    expect(result.text).not.toContain("new StdioClientTransport({");
+    expect(result.text).not.toContain("nemoClawMcpTimeoutMessage(serverName, server?.command");
+
+    await expect(
+      runPatchedFixture(result.text, "chrome", {
+        command: "npx",
+        args: ["@modelcontextprotocol/server-puppeteer"],
+      }),
+    ).resolves.toMatchObject({
+      transport: {
+        params: {
+          command: "npx",
+          args: ["-y", "@modelcontextprotocol/server-puppeteer"],
+        },
+      },
+    });
+  });
+
   it("patches an OpenClaw dist fixture through the CLI", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openclaw-mcp-npx-"));
     const dist = path.join(tmp, "dist");
     fs.mkdirSync(dist);
     const fixture = writeMcpFixture(dist);
+    const transportOnlyFixture = writeMcpTransportOnlyFixture(dist);
 
     try {
       const patch = runPatch(dist);
       expect(patch.status, `${patch.stdout}${patch.stderr}`).toBe(0);
       expect(patch.stdout).toContain("OpenClaw MCP npx normalization");
+      expect(patch.stdout).toContain("patched,patched-no-timeout");
 
       const patched = fs.readFileSync(fixture, "utf-8");
       expect(patched).toContain(MARKER);
@@ -185,6 +246,24 @@ describe("OpenClaw MCP npx normalization patch", () => {
         "nemoClawMcpTimeoutMessage(serverName, server?.command, server?.args, CONNECTION_TIMEOUT_MS)",
       );
       expect(patched).toContain("pre-install the package");
+
+      const transportOnlyPatched = fs.readFileSync(transportOnlyFixture, "utf-8");
+      expect(transportOnlyPatched).toContain(MARKER);
+      expect(transportOnlyPatched).toContain("new NemoClawMcpStdioClientTransport({");
+      expect(transportOnlyPatched).not.toContain("new StdioClientTransport({");
+      await expect(
+        runPatchedFixture(transportOnlyPatched, "chrome", {
+          command: "npx",
+          args: ["@modelcontextprotocol/server-puppeteer"],
+        }),
+      ).resolves.toMatchObject({
+        transport: {
+          params: {
+            command: "npx",
+            args: ["-y", "@modelcontextprotocol/server-puppeteer"],
+          },
+        },
+      });
 
       await expect(
         runPatchedFixture(patched, "filesystem", {

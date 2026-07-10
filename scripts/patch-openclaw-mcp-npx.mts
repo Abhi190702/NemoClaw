@@ -235,19 +235,13 @@ function patchTimeoutMessages(
   );
   text = text.replace(
     /"MCP server connection timed out after "\.concat\(([^,]+),\s*"ms"\)/g,
-    (_match: string, expression: string, offset: number) => {
-      const replacement = buildTimeoutReplacement(source, expression, offset);
-      if (replacement.startsWith("nemoClawMcpTimeoutMessage(")) return replacement;
-      return `"MCP server connection timed out after ".concat(${expression}, "ms. ${TIMEOUT_HINT}")`;
-    },
+    (_match: string, expression: string, offset: number) =>
+      buildTimeoutReplacement(source, expression, offset),
   );
   text = text.replace(
     /"MCP server connection timed out after "\s*\+\s*([^+]+?)\s*\+\s*"ms"/g,
-    (_match: string, expression: string, offset: number) => {
-      const replacement = buildTimeoutReplacement(source, expression, offset);
-      if (replacement.startsWith("nemoClawMcpTimeoutMessage(")) return replacement;
-      return `"MCP server connection timed out after " + ${expression.trim()} + "ms. ${TIMEOUT_HINT}"`;
-    },
+    (_match: string, expression: string, offset: number) =>
+      buildTimeoutReplacement(source, expression, offset),
   );
 
   if (
@@ -294,9 +288,6 @@ export function patchMcpTransportText(source: string, filePath: string): PatchTe
   );
   if (!withTransport.includes(PATCHED_TRANSPORT_CONSTRUCTOR)) {
     throw new Error(`${filePath}: MCP stdio transport patch verification failed`);
-  }
-  if (!withTransport.includes("MCP server connection timed out after")) {
-    throw new Error(`${filePath}: MCP stdio transport target missing timeout diagnostic`);
   }
 
   const timeout = patchTimeoutMessages(withTransport, filePath);
