@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { describe, expect, it } from "vitest";
 
 import { runWithEnv, testTimeoutOptions } from "./helpers";
 
@@ -74,10 +74,14 @@ describe("CLI dispatch", () => {
     expect(openshellOutput).not.toContain("gateway destroy -g nemoclaw");
     expect(openshellOutput).not.toContain("gateway remove nemoclaw");
     expect(fs.readFileSync(bashLog, "utf8")).not.toContain("volume ls -q --filter");
+    // The preserved-gateway hint must recommend the real subcommand
+    // (`gateway remove`), never the nonexistent `gateway destroy` (#6569).
+    expect(r.out).toContain("openshell gateway remove nemoclaw");
+    expect(r.out).not.toContain("gateway destroy");
   });
 
   it(
-    "tears down the gateway runtime when --cleanup-gateway is passed (#2166)",
+    "falls back to legacy gateway destroy and still cleans volumes when remove fails (#6569)",
     testTimeoutOptions(30_000),
     () => {
       const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-destroy-last-cleanup-"));
@@ -115,6 +119,9 @@ describe("CLI dispatch", () => {
           "  exit 0",
           "fi",
           'printf \'%s\\n\' "$*" >> "$log_file"',
+          'if [ "$1" = "gateway" ] && [ "$2" = "remove" ]; then',
+          "  exit 1",
+          "fi",
           "exit 0",
         ].join("\n"),
         { mode: 0o755 },
@@ -145,10 +152,11 @@ describe("CLI dispatch", () => {
       const openshellOutput = fs.readFileSync(openshellLog, "utf8");
       expect(openshellOutput).toContain("sandbox delete alpha");
       expect(openshellOutput).toContain("forward stop 18789");
-      expect(openshellOutput).toContain(
-        process.platform === "linux"
-          ? "gateway remove nemoclaw-8081"
-          : "gateway destroy -g nemoclaw-8081",
+      // `gateway remove` is the modern subcommand on every platform (#6569).
+      expect(openshellOutput).toContain("gateway remove nemoclaw-8081");
+      expect(openshellOutput).toContain("gateway destroy -g nemoclaw-8081");
+      expect(openshellOutput.indexOf("gateway remove nemoclaw-8081")).toBeLessThan(
+        openshellOutput.indexOf("gateway destroy -g nemoclaw-8081"),
       );
       expect(fs.readFileSync(bashLog, "utf8")).toContain(
         "volume ls -q --filter name=openshell-cluster-nemoclaw-8081",
@@ -223,8 +231,11 @@ describe("CLI dispatch", () => {
       expect(r.code, r.out).toBe(0);
       const openshellOutput = fs.readFileSync(openshellLog, "utf8");
       expect(openshellOutput).toContain("forward stop 18789");
-      expect(openshellOutput).toContain(
-        process.platform === "linux" ? "gateway remove nemoclaw" : "gateway destroy -g nemoclaw",
+      // `gateway remove` is the modern subcommand on every platform (#6569).
+      expect(openshellOutput).toContain("gateway remove nemoclaw");
+      expect(openshellOutput).not.toContain("gateway destroy -g nemoclaw");
+      expect(fs.readFileSync(bashLog, "utf8")).toContain(
+        "volume ls -q --filter name=openshell-cluster-nemoclaw",
       );
     },
   );
@@ -519,7 +530,93 @@ describe("CLI dispatch", () => {
     expect(selectIndex).toBeGreaterThanOrEqual(0);
     expect(deleteIndex).toBeGreaterThan(selectIndex);
     expect(lines.slice(deleteIndex + 1)).toContain("sandbox list");
+
+    // #5455 PRA-2: the persistent-state wipe (`sandbox exec --name alpha ...`)
+    // MUST come after gateway select and before sandbox delete. Running the
+    // wipe before gateway selection would have it land on whichever gateway
+    // happened to be currently active (`other-gateway` in this fixture), so
+    // a same-named sandbox there could get its workspace wiped while the
+    // intended PVC on `nemoclaw-8081` is left intact. Lock the order in.
+    const wipeIndex = lines.findIndex((line) => line.startsWith("sandbox exec --name alpha"));
+    expect(wipeIndex, "destroy did not issue the persistent-state wipe exec").toBeGreaterThan(
+      selectIndex,
+    );
+    expect(wipeIndex).toBeLessThan(deleteIndex);
   });
+
+  // #5455 Ultra PRA-3: when `--cleanup-gateway` is passed, the gateway-destroy
+  // tears the gateway runtime down after the sandbox is deleted. The wipe
+  // still has to land BEFORE `sandbox delete` (otherwise the PVC is gone),
+  // and the `gateway destroy / gateway remove` has to come AFTER it
+  // (otherwise the gateway the wipe exec targets is gone). Pin the full
+  // gateway-select -> wipe exec -> sandbox delete -> gateway teardown chain.
+  it(
+    "destroys with --cleanup-gateway and runs gateway-select -> wipe -> delete -> gateway-destroy in order",
+    testTimeoutOptions(30_000),
+    () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-destroy-cleanup-order-"));
+      const localBin = path.join(home, "bin");
+      const registryDir = path.join(home, ".nemoclaw");
+      const openshellLog = path.join(home, "openshell.log");
+      fs.mkdirSync(localBin, { recursive: true });
+      fs.mkdirSync(registryDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(registryDir, "sandboxes.json"),
+        JSON.stringify({
+          sandboxes: {
+            alpha: {
+              name: "alpha",
+              model: "test-model",
+              provider: "nvidia-prod",
+              gpuEnabled: false,
+              policies: [],
+              gatewayName: "nemoclaw-8081",
+              gatewayPort: 8081,
+            },
+          },
+          defaultSandbox: "alpha",
+        }),
+        { mode: 0o600 },
+      );
+      fs.writeFileSync(
+        path.join(localBin, "openshell"),
+        [
+          "#!/bin/sh",
+          `log_file=${JSON.stringify(openshellLog)}`,
+          'printf \'%s\\n\' "$*" >> "$log_file"',
+          'if [ "$1" = "sandbox" ] && [ "$2" = "list" ]; then',
+          '  printf "NAME STATUS\\n"',
+          "fi",
+          "exit 0",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      fs.writeFileSync(path.join(localBin, "docker"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      fs.writeFileSync(path.join(localBin, "pgrep"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      fs.writeFileSync(path.join(localBin, "lsof"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+
+      const r = runWithEnv(
+        "alpha destroy -y --cleanup-gateway",
+        { HOME: home, PATH: `${localBin}:${process.env.PATH || ""}` },
+        30_000,
+      );
+
+      expect(r.code, r.out).toBe(0);
+      const lines = fs.readFileSync(openshellLog, "utf8").trim().split("\n");
+      const selectIndex = lines.indexOf("gateway select nemoclaw-8081");
+      const wipeIndex = lines.findIndex((line) => line.startsWith("sandbox exec --name alpha"));
+      const deleteIndex = lines.indexOf("sandbox delete alpha");
+      const gatewayDestroyIndex = lines.findIndex(
+        (line) =>
+          line === "gateway remove nemoclaw-8081" || line === "gateway destroy -g nemoclaw-8081",
+      );
+
+      expect(selectIndex, "gateway select did not run").toBeGreaterThanOrEqual(0);
+      expect(wipeIndex, "wipe exec did not run").toBeGreaterThan(selectIndex);
+      expect(deleteIndex, "sandbox delete did not run").toBeGreaterThan(wipeIndex);
+      expect(gatewayDestroyIndex, "gateway teardown did not run").toBeGreaterThan(deleteIndex);
+    },
+  );
 
   it("fails destroy when openshell sandbox delete returns a real error", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-destroy-failure-"));

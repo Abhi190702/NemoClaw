@@ -4,7 +4,10 @@
 import type { JsonObject } from "../../core/json-types";
 import type { Session, SessionUpdates } from "../../state/onboard-session";
 import * as onboardSession from "../../state/onboard-session";
-import type { StepMutationOptions } from "../../state/onboard-step-mutation";
+import {
+  RECORD_ONLY_STEP_MUTATION_OPTIONS,
+  type StepMutationOptions,
+} from "../../state/onboard-step-mutation";
 import type { ResumeConfigConflict } from "../resume-config";
 import {
   createOnboardMachineEvent,
@@ -126,14 +129,41 @@ export class OnboardRuntime {
     return session;
   }
 
-  async markStepStarted(stepName: string, options: StepMutationOptions = {}): Promise<Session> {
+  /**
+   * Attempts observer dispatch for a durable recovery receipt.
+   *
+   * The receipt stays on the snapshot until the next machine transition, so a
+   * process restart before that transition retries the same deterministic ID.
+   * Observer delivery remains best-effort by design.
+   */
+  async emitPendingSessionRecovery(): Promise<Session> {
+    const session = this.ensureSession();
+    const receipt = session.machine.recoveryReceipt;
+    if (!receipt) return session;
+    this.emit("state.repair.completed", session, {
+      state: receipt.entry,
+      metadata: {
+        reason: receipt.reason,
+        entry: receipt.entry,
+        receiptId: receipt.id,
+        appliedAt: receipt.appliedAt,
+        revision: receipt.revision,
+      },
+    });
+    return session;
+  }
+
+  async markStepStarted(
+    stepName: string,
+    options: StepMutationOptions = RECORD_ONLY_STEP_MUTATION_OPTIONS,
+  ): Promise<Session> {
     return this.deps.markStepStarted(stepName, options);
   }
 
   async markStepComplete(
     stepName: string,
     updates: SessionUpdates = {},
-    options: StepMutationOptions = {},
+    options: StepMutationOptions = RECORD_ONLY_STEP_MUTATION_OPTIONS,
   ): Promise<Session> {
     return this.deps.markStepComplete(stepName, updates, options);
   }
@@ -152,7 +182,7 @@ export class OnboardRuntime {
   async markStepFailed(
     stepName: string,
     message: string | null = null,
-    options: StepMutationOptions = {},
+    options: StepMutationOptions = RECORD_ONLY_STEP_MUTATION_OPTIONS,
   ): Promise<Session> {
     return this.deps.markStepFailed(stepName, message, options);
   }

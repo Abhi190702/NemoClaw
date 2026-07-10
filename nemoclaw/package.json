@@ -15,7 +15,7 @@
       "minGatewayVersion": "2026.5.22"
     },
     "build": {
-      "openclawVersion": "2026.5.27"
+      "openclawVersion": "2026.6.10"
     }
   },
   "scripts": {
@@ -33,12 +33,12 @@
     "execa": "^9.6.1",
     "json5": "^2.2.3",
     "tar": "^7.0.0",
-    "yaml": "^2.4.0"
+    "yaml": "2.8.3"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.14",
     "@types/node": "^22.0.0",
-    "typescript": "^5.4.0",
+    "typescript": "6.0.3",
     "vitest": "^4.1.0"
   },
   "engines": {

@@ -6,6 +6,7 @@ import {
   type DashboardRuntimeAgent,
   getAgentDeclaredForwardPorts,
   getAgentPrimaryForwardPort,
+  isValidForwardPort,
   shouldManageDashboardForAgent,
 } from "./dashboard-runtime";
 
@@ -18,41 +19,72 @@ export type EnsureDashboardForward = (
   },
 ) => number;
 
-export type AgentDashboardForwardConfig = NonNullable<DashboardRuntimeAgent>;
+export type AgentDashboardForwardConfig = NonNullable<DashboardRuntimeAgent> & {
+  dashboard?: { kind?: unknown } | null;
+  dashboardUi?: unknown;
+};
 
 export function ensureAgentDashboardForward(options: {
   sandboxName: string;
   agent: AgentDashboardForwardConfig;
   ensureDashboardForward: EnsureDashboardForward;
+  chatUiUrl?: string;
   controlUiPort?: number;
+  preserveForwardPorts?: readonly (number | null | undefined)[];
   warn?: (message: string) => void;
 }): number {
   const {
     sandboxName,
     agent,
     ensureDashboardForward,
-    controlUiPort = DASHBOARD_PORT,
+    chatUiUrl,
+    controlUiPort,
+    preserveForwardPorts = [],
     warn = (message: string) => console.warn(message),
   } = options;
   if (!shouldManageDashboardForAgent(agent)) {
     return 0;
   }
 
-  const declaredPorts = getAgentDeclaredForwardPorts(agent);
-  const agentDashboardPort = getAgentPrimaryForwardPort(agent, controlUiPort);
-  const preservePorts = [...new Set([agentDashboardPort, ...declaredPorts])];
-  const actualAgentDashboardPort = ensureDashboardForward(
-    sandboxName,
-    `http://127.0.0.1:${agentDashboardPort}`,
-    { preserveSandboxPorts: preservePorts },
+  const declaredPrimaryPort = getAgentPrimaryForwardPort(agent, DASHBOARD_PORT);
+  const usesFixedApiPort = agent.dashboard?.kind === "api";
+  const agentDashboardPort =
+    !usesFixedApiPort && isValidForwardPort(controlUiPort) ? controlUiPort : declaredPrimaryPort;
+  const optionalDashboardPort =
+    usesFixedApiPort && agent.dashboardUi && isValidForwardPort(controlUiPort)
+      ? controlUiPort
+      : null;
+  const declaredPorts = getAgentDeclaredForwardPorts(agent).filter(
+    (port) => port !== declaredPrimaryPort || port === agentDashboardPort,
   );
-  process.env.CHAT_UI_URL = `http://127.0.0.1:${actualAgentDashboardPort}`;
+  const preservePorts = [
+    ...new Set([
+      agentDashboardPort,
+      ...declaredPorts,
+      optionalDashboardPort,
+      ...preserveForwardPorts,
+    ]),
+  ].filter(isValidForwardPort);
+  const requestedDashboardUrl =
+    !usesFixedApiPort && chatUiUrl
+      ? replaceUrlPort(chatUiUrl, agentDashboardPort)
+      : `http://127.0.0.1:${agentDashboardPort}`;
+  const actualAgentDashboardPort = ensureDashboardForward(sandboxName, requestedDashboardUrl, {
+    preserveSandboxPorts: preservePorts,
+  });
+  if (!usesFixedApiPort) {
+    process.env.CHAT_UI_URL = replaceUrlPort(requestedDashboardUrl, actualAgentDashboardPort);
+  }
 
   const portsToPreserve = [...new Set([...preservePorts, actualAgentDashboardPort])];
   for (const port of preservePorts) {
     if (port === agentDashboardPort) continue;
     try {
-      ensureDashboardForward(sandboxName, `http://127.0.0.1:${port}`, {
+      const forwardUrl =
+        port === optionalDashboardPort && chatUiUrl
+          ? replaceUrlPort(chatUiUrl, port)
+          : `http://127.0.0.1:${port}`;
+      ensureDashboardForward(sandboxName, forwardUrl, {
         preserveSandboxPorts: portsToPreserve,
         allowPortReallocation: false,
       });
@@ -66,4 +98,14 @@ export function ensureAgentDashboardForward(options: {
   }
 
   return actualAgentDashboardPort;
+}
+
+function replaceUrlPort(value: string, port: number): string {
+  try {
+    const parsed = new URL(value.includes("://") ? value : `http://${value}`);
+    parsed.port = String(port);
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return `http://127.0.0.1:${port}`;
+  }
 }

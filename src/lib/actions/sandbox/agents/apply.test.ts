@@ -9,7 +9,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildAgentsApplyDiff,
+  buildOpenclawAgentAddArgs,
+  buildOpenclawAgentDeleteArgs,
   computeAgentsApplyDiff,
+  parseOpenClawAgentsList,
   runAgentsApply,
   validateAgentsManifestForApply,
 } from "./apply";
@@ -96,6 +99,34 @@ describe("buildAgentsApplyDiff", () => {
     expect(diff.rebuildOnlyFields.sort()).toEqual(
       ["agents[alpha].tools", "agents[beta].tools"].sort(),
     );
+  });
+});
+
+describe("parseOpenClawAgentsList", () => {
+  it("parses the bare array returned by current OpenClaw", () => {
+    expect(
+      parseOpenClawAgentsList(
+        JSON.stringify([{ id: "main" }, { id: "alpha" }, { name: "missing-id" }]),
+      ),
+    ).toEqual([{ id: "main" }, { id: "alpha" }]);
+  });
+
+  it("accepts an object wrapper with an agents array", () => {
+    expect(parseOpenClawAgentsList(JSON.stringify({ agents: [{ id: "main" }] }))).toEqual([
+      { id: "main" },
+    ]);
+  });
+
+  it("strips leading warning text before the JSON payload", () => {
+    expect(
+      parseOpenClawAgentsList(
+        [
+          "[plugins] warning: deprecated config key ignored",
+          "OpenClaw warning: falling back to default workspace",
+          JSON.stringify([{ id: "main" }, { id: "logs-reader" }]),
+        ].join("\n"),
+      ),
+    ).toEqual([{ id: "main" }, { id: "logs-reader" }]);
   });
 });
 
@@ -417,5 +448,34 @@ describe("runAgentsApply", () => {
     expect(addAgent).not.toHaveBeenCalled();
     expect(deleteAgent).not.toHaveBeenCalled();
     expect(messages.some((line) => /No roster changes to apply/.test(line))).toBe(true);
+  });
+});
+
+describe("openclaw agents argv (#5656)", () => {
+  it("delete uses --force and never --non-interactive (rejected by openclaw agents delete)", () => {
+    const args = buildOpenclawAgentDeleteArgs("logs-reader");
+    expect(args).toEqual(["openclaw", "agents", "delete", "logs-reader", "--force"]);
+    expect(args).not.toContain("--non-interactive");
+  });
+
+  it("add still passes --non-interactive (accepted by openclaw agents add) and optional --workspace", () => {
+    expect(buildOpenclawAgentAddArgs("logs-reader")).toEqual([
+      "openclaw",
+      "agents",
+      "add",
+      "logs-reader",
+      "--non-interactive",
+    ]);
+    expect(
+      buildOpenclawAgentAddArgs("logs-reader", "/sandbox/.openclaw/workspace-logs-reader"),
+    ).toEqual([
+      "openclaw",
+      "agents",
+      "add",
+      "logs-reader",
+      "--non-interactive",
+      "--workspace",
+      "/sandbox/.openclaw/workspace-logs-reader",
+    ]);
   });
 });
