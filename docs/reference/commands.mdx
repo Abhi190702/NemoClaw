@@ -1462,10 +1462,19 @@ Do not log it, share it, or commit it to version control.
 </AgentOnly>
 <AgentOnly variant="hermes">
 
-`gateway-token` is not applicable to Hermes sandboxes.
-Hermes API access uses bearer-token authentication configured through the Hermes runtime, not the OpenClaw gateway token.
-For browser access to the dashboard, use `nemohermes my-assistant dashboard-url`; Hermes dashboard auth is read from the in-sandbox config (`/sandbox/.hermes/config.yaml`), not a gateway token.
-If you need the endpoint for an OpenAI-compatible client, use `nemohermes my-assistant status` and the API URL it reports.
+Print the Hermes API bearer token for a running sandbox to stdout.
+NemoClaw retrieves the sandbox's `API_SERVER_KEY`, which authenticates OpenAI-compatible clients on the forwarded API port.
+Capture the token and pass it in the `Authorization` header:
+
+```bash
+TOKEN=$(nemohermes my-assistant gateway-token --quiet)
+curl -fsS -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8642/v1/models
+```
+
+Treat the token like a password.
+Do not log it, share it, or commit it to version control.
+For browser access to the dashboard, use `nemohermes my-assistant dashboard-url`.
 
 </AgentOnly>
 <AgentOnly variant="deepagents">
