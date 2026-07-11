@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { WebSearchConfig } from "../../inference/web-search";
+import type { DcodeAutoApprovalMode } from "../dcode-auto-approval";
 import {
   mergeProviderModelSelectedContext,
   mergeSandboxCreatedContext,
@@ -14,7 +15,10 @@ import {
   type ProviderInferenceStateOptions,
 } from "./handlers/provider-inference";
 import { handleSandboxState, type SandboxStateOptions } from "./handlers/sandbox";
-import { runLiveOnboardFlowSlice } from "./live-flow-slice";
+import {
+  type InvalidatedOnboardStateResultRecorder,
+  runLiveOnboardFlowSlice,
+} from "./live-flow-slice";
 import type { OnboardStateResult } from "./result";
 import type { OnboardMachineRunnerResult, OnboardMachineRunnerRuntime } from "./runner";
 import type { OnboardSequencePhase } from "./sequence-runner";
@@ -35,7 +39,9 @@ export interface CoreOnboardFlowPhaseOptions<
   sandbox: {
     resumeAgentChanged: boolean;
     requestedObservabilityEnabled?: boolean | null;
+    requestedDcodeAutoApprovalMode?: DcodeAutoApprovalMode | null;
     authoritativePolicyTier?: string | null;
+    recreateSandbox: (requested?: boolean) => boolean;
     controlUiPort: number | null;
     rootDir: string;
   };
@@ -115,6 +121,8 @@ export function createCoreOnboardFlowPhases<
       authoritativePolicyTier: options.sandbox.authoritativePolicyTier,
       resumeAgentChanged: options.sandbox.resumeAgentChanged,
       requestedObservabilityEnabled: options.sandbox.requestedObservabilityEnabled,
+      requestedDcodeAutoApprovalMode: options.sandbox.requestedDcodeAutoApprovalMode,
+      recreateSandbox: options.sandbox.recreateSandbox,
       session: context.session,
       sandboxName: context.sandboxName,
       model: context.model,
@@ -160,20 +168,23 @@ export async function runCoreOnboardFlowSlice<Context extends OnboardFlowContext
   phases: readonly OnboardSequencePhase<Context>[];
   resume: boolean;
   recordStateResult(result: OnboardStateResult): Promise<unknown>;
+  recordInvalidatedStateResult: InvalidatedOnboardStateResultRecorder;
 }): Promise<OnboardMachineRunnerResult<Context>> {
-  // Compatibility bridge for live resume repair when durable machine snapshots
+  // Recompute plan for live resume repair when durable machine snapshots
   // are already downstream of this slice even though provider/sandbox
   // repair/backstop checks must still re-run. Those ahead-state snapshots can
   // come from legacy/test step mutation that explicitly opts into
   // `updateMachine === true` or from repaired-resume replay of persisted
-  // sessions. This slice cannot eliminate that source locally because the
-  // repair/backstop checks are still modeled as imperative resume work rather
-  // than strict FSM recovery states. The tolerated downstream family includes
-  // sandbox branch states and the final slice handoff states: openclaw,
-  // agent_setup, policies, finalizing, and post_verify. Phase tests cover
-  // ahead-state resume and terminal-state rejection; remove this fallback once
-  // those checks are strict FSM recovery states and legacy machine step mutation
-  // is gone.
+  // sessions. Recomputed transition results are explicitly applied or
+  // invalidated by runLiveOnboardFlowSlice, so stale phase output cannot update
+  // context or silently advance state. This slice cannot eliminate that source
+  // locally because the repair/backstop checks are still modeled as imperative
+  // resume work rather than strict FSM recovery states. The tolerated downstream
+  // family includes sandbox branch states and the final slice handoff states:
+  // openclaw, agent_setup, policies, finalizing, and post_verify. Phase tests
+  // cover ahead-state resume and terminal-state rejection; remove this fallback
+  // once those checks are strict FSM recovery states and legacy machine step
+  // mutation is gone.
   return runLiveOnboardFlowSlice({
     context: options.context,
     runtime: options.runtime,
@@ -192,6 +203,7 @@ export async function runCoreOnboardFlowSlice<Context extends OnboardFlowContext
         ]
       : ["inference", "sandbox", "openclaw", "agent_setup"],
     runSlice: runCoreOnboardFlowSequence,
-    applyCompatibleResult: options.recordStateResult,
+    recordStateResult: options.recordStateResult,
+    recordInvalidatedStateResult: options.recordInvalidatedStateResult,
   });
 }

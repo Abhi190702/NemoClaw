@@ -16,6 +16,12 @@ import {
 } from "./events";
 import type { OnboardStateResult } from "./result";
 import {
+  buildResultInvalidatedEvent,
+  buildResultSkippedEvent,
+  type ResultInvalidatedInputs,
+  type ResultSkippedInputs,
+} from "./result-events";
+import {
   assertValidOnboardMachineTransition,
   canTransitionOnboardMachineState,
   isTerminalOnboardMachineState,
@@ -125,6 +131,30 @@ export class OnboardRuntime {
     this.emit(options.resumed === true ? "onboard.resumed" : "onboard.started", session, {
       state: session.machine.state,
       metadata: options.metadata,
+    });
+    return session;
+  }
+
+  /**
+   * Attempts observer dispatch for a durable recovery receipt.
+   *
+   * The receipt stays on the snapshot until the next machine transition, so a
+   * process restart before that transition retries the same deterministic ID.
+   * Observer delivery remains best-effort by design.
+   */
+  async emitPendingSessionRecovery(): Promise<Session> {
+    const session = this.ensureSession();
+    const receipt = session.machine.recoveryReceipt;
+    if (!receipt) return session;
+    this.emit("state.repair.completed", session, {
+      state: receipt.entry,
+      metadata: {
+        reason: receipt.reason,
+        entry: receipt.entry,
+        receiptId: receipt.id,
+        appliedAt: receipt.appliedAt,
+        revision: receipt.revision,
+      },
     });
     return session;
   }
@@ -329,22 +359,15 @@ export class OnboardRuntime {
     return session;
   }
 
-  async emitResultSkipped(options: {
-    reason: "already_at_target" | "source_state_mismatch";
-    currentState: OnboardMachineState;
-    targetState: OnboardMachineState;
-    metadata?: Record<string, unknown> | null;
-  }): Promise<Session> {
+  async emitResultSkipped(options: ResultSkippedInputs): Promise<Session> {
     const session = this.ensureSession();
-    this.emit("state.result.skipped", session, {
-      state: session.machine.state,
-      metadata: {
-        ...eventMetadata(options.metadata),
-        reason: options.reason,
-        currentState: options.currentState,
-        targetState: options.targetState,
-      },
-    });
+    this.deps.emitEvent(buildResultSkippedEvent(session, options));
+    return session;
+  }
+
+  async emitResultInvalidated(options: ResultInvalidatedInputs): Promise<Session> {
+    const session = this.ensureSession();
+    this.deps.emitEvent(buildResultInvalidatedEvent(session, options));
     return session;
   }
 

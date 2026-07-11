@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { isBedrockRuntimeEndpoint } from "../inference/bedrock-runtime";
+import {
+  assertEndpointResolvesPublic,
+  type EndpointDnsLookupFn,
+} from "../inference/endpoint-ssrf-preflight";
 import {
   type CurrentGatewayRouteCompatibilityCheck,
   formatGatewayRouteConflict,
@@ -54,6 +59,7 @@ type ProviderBranchDeps = Pick<
     | "promptValidationRecovery"
     | "classifyApplyFailure"
     | "bedrockRuntimeOnboard"
+    | "openrouterRuntimeOnboard"
   > &
   Pick<
     VllmDeps,
@@ -72,6 +78,8 @@ type ProviderBranchDeps = Pick<
   Pick<RoutedDeps, "reconcileModelRouter" | "routedInference">;
 
 export type SetupInferenceDeps = ProviderBranchDeps & {
+  /** Injectable resolver for resumed custom-endpoint SSRF preflight tests. */
+  resolveEndpointHost?: EndpointDnsLookupFn;
   checkGatewayRouteCompatibility: CurrentGatewayRouteCompatibilityCheck;
   withGatewayRouteMutationLock: typeof withGatewayRouteMutationLock;
   withSandboxMutationLock: typeof withSandboxMutationLock;
@@ -220,6 +228,15 @@ export function createSetupInference(
     const gatewayName = options.gatewayName ?? deps.getGatewayName();
     const mutateGatewayRoute = (): Promise<SetupInferenceResult> =>
       deps.withGatewayRouteMutationLock(gatewayName, async () => {
+        if (
+          options.isRecordedProviderRecoveryAuthorized &&
+          !options.isRecordedProviderRecoveryAuthorized()
+        ) {
+          deps.error(
+            `  Error: recorded inference recovery for sandbox '${sandboxName}' lost reservation ownership before route setup.`,
+          );
+          return deps.exitProcess(1);
+        }
         const compatibility = deps.checkGatewayRouteCompatibility({
           gatewayName,
           sandboxName,
@@ -235,6 +252,32 @@ export function createSetupInference(
           return deps.exitProcess(1);
         }
         deps.step(4, 8, "Setting up inference provider");
+        let endpointPinnedAddresses = options.endpointPinnedAddresses;
+        // Strictly classified AWS Bedrock Runtime hostnames use the dedicated
+        // SigV4/bearer adapter rather than the generic curl probe path. Their
+        // hostname is constrained to AWS-owned suffixes by the classifier, so
+        // do not apply the custom-origin curl pinning contract here.
+        const usesBedrockRuntimeAdapter =
+          provider === "compatible-anthropic-endpoint" && isBedrockRuntimeEndpoint(endpointUrl);
+        if (
+          (provider === "compatible-endpoint" || provider === "compatible-anthropic-endpoint") &&
+          endpointUrl &&
+          !usesBedrockRuntimeAdapter &&
+          !endpointPinnedAddresses
+        ) {
+          const preflight = await assertEndpointResolvesPublic(
+            endpointUrl,
+            deps.resolveEndpointHost,
+          );
+          if (!preflight.ok) {
+            deps.error(
+              `  Endpoint SSRF preflight failed: ${preflight.reason ?? "endpoint is not safe to probe"}`,
+            );
+            if (deps.isNonInteractive()) return deps.exitProcess(1);
+            return { retry: "selection" };
+          }
+          endpointPinnedAddresses = preflight.addresses;
+        }
         const runGatewayOpenshell = createGatewayScopedOpenshellRunner(
           deps.runOpenshell,
           gatewayName,
@@ -249,6 +292,7 @@ export function createSetupInference(
             credentialEnv,
             preferredInferenceApi: options.preferredInferenceApi ?? null,
             gatewayName,
+            reservationSessionId: options.reservationSessionId,
           });
           routeReserved = reserved;
           return reserved;
@@ -261,7 +305,13 @@ export function createSetupInference(
             if (sandboxName) reserveRoute(sandboxName, selectedProvider, selectedModel);
             deps.verifyInferenceRoute(gatewayName, selectedProvider, selectedModel);
           },
-          verifyOnboardInferenceSmoke: deps.verifyOnboardInferenceSmoke,
+          verifyOnboardInferenceSmoke: (
+            input: Parameters<CommonDeps["verifyOnboardInferenceSmoke"]>[0],
+          ) =>
+            deps.verifyOnboardInferenceSmoke({
+              ...input,
+              pinnedAddresses: endpointPinnedAddresses,
+            }),
           isNonInteractive: deps.isNonInteractive,
           registry: {
             updateSandbox: (name: string) => reserveRoute(name, provider, model),
@@ -311,7 +361,9 @@ export function createSetupInference(
               credentialEnv,
               reuseGatewayCredentialWithoutLocalKey:
                 options.reuseGatewayCredentialWithoutLocalKey === true,
+              skipHostInferenceSmoke: options.skipHostInferenceSmoke === true,
               preferredInferenceApi: options.preferredInferenceApi ?? null,
+              pinnedAddresses: endpointPinnedAddresses,
             },
             {
               ...commonDeps,
@@ -321,6 +373,7 @@ export function createSetupInference(
               classifyApplyFailure: deps.classifyApplyFailure,
               LOCAL_INFERENCE_TIMEOUT_SECS: deps.localInferenceTimeoutSecs,
               bedrockRuntimeOnboard: deps.bedrockRuntimeOnboard,
+              openrouterRuntimeOnboard: deps.openrouterRuntimeOnboard,
               redact: deps.redact,
               compactText: deps.compactText,
               probeOpenAiLikeEndpoint: deps.probeOpenAiLikeEndpoint,
@@ -389,7 +442,14 @@ export function createSetupInference(
         commonDeps.verifyInferenceRoute(provider, model);
         if (options.skipHostInferenceSmoke === true)
           deps.log("  Reusing existing gateway credential; skipping host inference smoke.");
-        else deps.verifyOnboardInferenceSmoke({ provider, model, endpointUrl, credentialEnv });
+        else
+          await deps.verifyOnboardInferenceSmoke({
+            provider,
+            model,
+            endpointUrl,
+            credentialEnv,
+            pinnedAddresses: endpointPinnedAddresses,
+          });
         if (sandboxName) {
           commonDeps.registry.updateSandbox(sandboxName);
         }

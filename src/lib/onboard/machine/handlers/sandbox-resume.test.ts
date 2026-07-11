@@ -18,6 +18,7 @@ function resumeSignals(overrides: Partial<SandboxResumeSignals> = {}): SandboxRe
     inferenceRouteConfigChanged: false,
     webSearchConfigChanged: false,
     sandboxGpuConfigChanged: false,
+    recreateSandboxRequested: false,
     messagingChannelConfigChanged: false,
     hermesToolGatewayConfigChanged: false,
     toolDisclosureMigrationNeeded: false,
@@ -35,10 +36,12 @@ describe("decideSandboxResume", () => {
   it.each([
     ["agent", { resumeAgentChanged: true }, false],
     ["web search", { webSearchConfigChanged: true }, true],
+    ["explicit recreate", { recreateSandboxRequested: true }, false],
     ["sandbox GPU", { sandboxGpuConfigChanged: true }, true],
     ["messaging", { messagingChannelConfigChanged: true }, true],
     ["Hermes tool gateway", { hermesToolGatewayConfigChanged: true }, true],
     ["observability", { observabilityChanged: true }, false],
+    ["DCode auto-approval", { dcodeAutoApprovalChanged: true }, false],
     ["tool disclosure migration", { toolDisclosureMigrationNeeded: true }, false],
     ["tool disclosure", { toolDisclosureChanged: true }, false],
     ["live DCode inference selection", { inferenceSelectionChanged: true }, false],
@@ -125,6 +128,17 @@ describe("decideSandboxResume", () => {
     expect(decideSandboxResume(resumeSignals({ sandboxReuseState: "not_ready" }))).toEqual({
       kind: "repair-and-recreate",
     });
+  });
+
+  it("repairs a not-ready sandbox before recreating for DCode auto-approval drift", () => {
+    expect(
+      decideSandboxResume(
+        resumeSignals({
+          sandboxReuseState: "not_ready",
+          dcodeAutoApprovalChanged: true,
+        }),
+      ),
+    ).toEqual({ kind: "repair-and-recreate" });
   });
 
   it("creates without resume-specific cleanup when the step is incomplete", () => {

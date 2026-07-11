@@ -7,6 +7,7 @@ import path from "node:path";
 
 const CURL_AUTH_CONFIG_PREFIX = "nemoclaw-curl-auth";
 const CURL_AUTH_CONFIG_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9._-]{0,127}$/;
+const HTTP_HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
 function resolveCurlAuthConfigPrefix(prefix: string | undefined): string {
   if (prefix === undefined) return CURL_AUTH_CONFIG_PREFIX;
@@ -129,14 +130,45 @@ export function createQueryParamAuthConfig(
 
 export type OpenAiLikeAuthMode = "bearer" | "query-param";
 
+export interface CreateOpenAiLikeAuthConfigOptions extends CreateCurlAuthConfigOptions {
+  extraHeaders?: readonly string[];
+}
+
+export interface OpenAiLikeExtraHeader {
+  name: string;
+  value: string;
+}
+
+export function parseOpenAiLikeExtraHeaders(
+  extraHeaders: readonly string[] = [],
+): OpenAiLikeExtraHeader[] {
+  return extraHeaders.map((header) => {
+    const sanitized = header.replace(/[\r\n]+/g, " ");
+    const separator = sanitized.indexOf(":");
+    const name = separator < 0 ? "" : sanitized.slice(0, separator).trim();
+    if (!HTTP_HEADER_NAME_PATTERN.test(name)) {
+      throw new Error("invalid OpenAI-like provider header");
+    }
+    return {
+      name,
+      value: sanitized.slice(separator + 1).trim(),
+    };
+  });
+}
+
 export function createOpenAiLikeAuthConfig(
   apiKey: string,
   authMode?: OpenAiLikeAuthMode,
-  options: CreateCurlAuthConfigOptions = {},
+  options: CreateOpenAiLikeAuthConfigOptions = {},
 ): CurlAuthConfig {
-  if (!apiKey) return EMPTY_CURL_AUTH_CONFIG;
+  const entries: CurlAuthConfigEntry[] = [];
   if (authMode === "query-param") {
-    return createQueryParamAuthConfig("key", apiKey, options);
+    if (apiKey) entries.push({ kind: "url-query", name: "key", value: apiKey });
+  } else if (apiKey) {
+    entries.push({ kind: "header", value: `Authorization: Bearer ${apiKey}` });
   }
-  return createBearerAuthConfig(apiKey, options);
+  for (const { name, value } of parseOpenAiLikeExtraHeaders(options.extraHeaders)) {
+    entries.push({ kind: "header", value: `${name}: ${value}` });
+  }
+  return createCurlAuthConfig(entries, options);
 }

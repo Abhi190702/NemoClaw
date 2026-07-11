@@ -23,10 +23,12 @@ import {
   getImageGlibcVersion,
   type ResolveBaseImageOptions,
   resolveSandboxBaseImage,
+  SandboxBaseImageResolutionError,
   SANDBOX_BASE_TAG,
   type SandboxBaseImageResolution,
   type SandboxBaseImageResolutionMetadata,
 } from "../sandbox-base-image";
+import { createDeepAgentsCodeBaseImageResolutionOptions } from "./deep-agents-code-base-image";
 import type { AgentDefinition } from "./defs";
 
 const HERMES_MCP_RUNTIME_PROBE_OK = "nemoclaw-hermes-mcp-runtime-ok";
@@ -163,7 +165,13 @@ function createAgentBaseImageResolutionOptions(
   options: EnsureAgentBaseImageOptions,
 ): ResolveBaseImageOptions {
   const imageName = `ghcr.io/nvidia/nemoclaw/${agent.name}-sandbox-base`;
-  const validateImage = agent.name === "hermes" ? hermesBaseImageSupportsMcp : undefined;
+  const validationOptions =
+    agent.name === "hermes"
+      ? {
+          validateImage: hermesBaseImageSupportsMcp,
+          validationDescription: "the required MCP Streamable HTTP runtime",
+        }
+      : createDeepAgentsCodeBaseImageResolutionOptions(agent, dockerfilePath);
   const pinnedRemoteRef = getHermesPinnedRemoteBaseRef(agent) ?? undefined;
   return {
     imageName,
@@ -177,9 +185,7 @@ function createAgentBaseImageResolutionOptions(
     rootDir: ROOT,
     pinnedRemoteRef,
     preferPinnedRemoteRef: agent.name === "hermes" && pinnedRemoteRef !== undefined,
-    validateImage,
-    validationDescription:
-      agent.name === "hermes" ? "the required MCP Streamable HTTP runtime" : undefined,
+    ...validationOptions,
   };
 }
 
@@ -250,7 +256,12 @@ export function ensureAgentBaseImage(
     }
     try {
       const pinnedBaseImageTag = pinAgentSandboxBaseImageRef(agent.name, forceBuildTag);
-      const resolved = resolveExactImage(pinnedBaseImageTag);
+      let resolved: SandboxBaseImageResolution | null = null;
+      try {
+        resolved = resolveExactImage(pinnedBaseImageTag);
+      } catch (error) {
+        if (!(error instanceof SandboxBaseImageResolutionError)) throw error;
+      }
       if (!resolved) {
         throw new Error(
           `Built ${agent.displayName} base image failed the required runtime compatibility checks`,

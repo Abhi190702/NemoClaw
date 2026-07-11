@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   normalizeDestroySandboxOptions,
@@ -11,12 +11,27 @@ import {
 } from "./options";
 
 describe("lifecycle option normalization", () => {
+  beforeEach(() => {
+    vi.stubEnv("NEMOCLAW_NON_INTERACTIVE", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("preserves typed destroy options and still accepts compatibility argv", () => {
     expect(normalizeDestroySandboxOptions({ yes: true })).toEqual({ yes: true });
     expect(normalizeDestroySandboxOptions(["--yes", "--force"])).toEqual({
       force: true,
       yes: true,
     });
+  });
+
+  it("normalizes the shared non-interactive environment into destroy confirmation", () => {
+    vi.stubEnv("NEMOCLAW_NON_INTERACTIVE", "1");
+
+    expect(normalizeDestroySandboxOptions([])).toEqual({ force: false, yes: true });
+    expect(normalizeDestroySandboxOptions({})).toEqual({ yes: true });
   });
 
   describe("destroy cleanupGateway resolution (#2166)", () => {
@@ -119,8 +134,14 @@ describe("lifecycle option normalization", () => {
 
   it("preserves typed rebuild options and still accepts compatibility argv", () => {
     expect(
-      normalizeRebuildSandboxOptions({ toolDisclosure: "direct", verbose: true, yes: true }),
+      normalizeRebuildSandboxOptions({
+        dcodeAutoApprovalMode: "thread-opt-in",
+        toolDisclosure: "direct",
+        verbose: true,
+        yes: true,
+      }),
     ).toEqual({
+      dcodeAutoApprovalMode: "thread-opt-in",
       toolDisclosure: "direct",
       verbose: true,
       yes: true,
@@ -136,6 +157,13 @@ describe("lifecycle option normalization", () => {
     expect(normalizeRebuildSandboxOptions(["--tool-disclosure=direct"]).toolDisclosure).toBe(
       "direct",
     );
+    expect(
+      normalizeRebuildSandboxOptions(["--dcode-auto-approval", "thread-opt-in"])
+        .dcodeAutoApprovalMode,
+    ).toBe("thread-opt-in");
+    expect(
+      normalizeRebuildSandboxOptions(["--dcode-auto-approval=disabled"]).dcodeAutoApprovalMode,
+    ).toBe("disabled");
     expect(normalizeRebuildSandboxOptions(["--observability"]).observabilityEnabled).toBe(true);
     expect(normalizeRebuildSandboxOptions(["--no-observability"]).observabilityEnabled).toBe(false);
     expect(
@@ -154,6 +182,15 @@ describe("lifecycle option normalization", () => {
     );
     expect(() => normalizeRebuildSandboxOptions(["--tool-disclosure="])).toThrow(
       /progressive, direct/,
+    );
+    expect(() => normalizeRebuildSandboxOptions(["--dcode-auto-approval", "always"])).toThrow(
+      /disabled, thread-opt-in/,
+    );
+    expect(() => normalizeRebuildSandboxOptions(["--dcode-auto-approval"])).toThrow(
+      /disabled, thread-opt-in/,
+    );
+    expect(() => normalizeRebuildSandboxOptions(["--dcode-auto-approval="])).toThrow(
+      /disabled, thread-opt-in/,
     );
   });
 

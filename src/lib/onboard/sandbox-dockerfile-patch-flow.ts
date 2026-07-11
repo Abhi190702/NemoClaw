@@ -8,6 +8,7 @@ import {
   type SandboxBaseImageResolutionMetadata,
 } from "../sandbox-base-image";
 import { DEFAULT_TOOL_DISCLOSURE, type ToolDisclosure } from "../tool-disclosure";
+import type { DcodeAutoApprovalMode } from "./dcode-auto-approval";
 import type { SandboxGpuConfig } from "./sandbox-gpu-mode";
 
 type DockerRunResult = { status: number | null };
@@ -37,9 +38,11 @@ export type PrepareSandboxDockerfilePatchInput = {
   model: string;
   chatUiUrl: string;
   provider: string | null;
+  endpointUrl?: string | null;
   preferredInferenceApi: string | null;
   webSearchConfig: WebSearchConfig | null;
   toolDisclosure?: ToolDisclosure;
+  dcodeAutoApprovalMode?: DcodeAutoApprovalMode;
   hermesToolGateways: string[];
   sandboxGpuConfig: SandboxGpuConfig;
   resolutionHint?: SandboxBaseImageResolutionMetadata | null;
@@ -101,9 +104,11 @@ export async function prepareSandboxDockerfilePatch({
   model,
   chatUiUrl,
   provider,
+  endpointUrl = null,
   preferredInferenceApi,
   webSearchConfig,
   toolDisclosure = DEFAULT_TOOL_DISCLOSURE,
+  dcodeAutoApprovalMode,
   hermesToolGateways,
   sandboxGpuConfig,
   resolutionHint = null,
@@ -188,6 +193,8 @@ export async function prepareSandboxDockerfilePatch({
       return {
         buildIdPolicy,
         toolDisclosure,
+        ...(endpointUrl ? { upstreamEndpointUrl: endpointUrl } : {}),
+        ...(dcodeAutoApprovalMode ? { dcodeAutoApprovalMode } : {}),
         requireToolDisclosureContract: Boolean(fromDockerfile),
         ...(metadata ? { baseImageResolutionMetadata: metadata } : {}),
       };

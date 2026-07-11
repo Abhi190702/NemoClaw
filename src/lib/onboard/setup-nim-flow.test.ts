@@ -22,6 +22,12 @@ const REMOTE_PROVIDER_CONFIG: SetupNimFlowDeps["remoteProviderConfig"] = {
     endpointUrl: "https://api.openai.com/v1",
     credentialEnv: "OPENAI_API_KEY",
   },
+  openrouter: {
+    label: "OpenRouter",
+    providerName: "openrouter-api",
+    endpointUrl: "https://openrouter.ai/api/v1",
+    credentialEnv: "OPENROUTER_API_KEY",
+  },
   custom: {
     label: "Other OpenAI-compatible endpoint",
     providerName: "compatible-endpoint",
@@ -136,14 +142,16 @@ afterEach(() => {
 });
 
 describe("createSetupNim", () => {
-  it("passes the Deep Agents manifest default to NVIDIA model selection", async () => {
+  it("passes the Deep Agents manifest default to shared NVIDIA/OpenRouter model selection", async () => {
     const ultra = "nvidia/nemotron-3-ultra-550b-a55b";
     const log = vi.fn();
+    const sharedSession = { select: async () => unexpected("featured model selection") };
     const createNvidiaFeaturedModelSession = vi.fn<
       SetupNimFlowDeps["createNvidiaFeaturedModelSession"]
-    >(() => ({ select: async () => unexpected("featured model selection") }));
+    >(() => sharedSession);
     const handleRemoteProviderSelection = vi.fn<SetupNimFlowDeps["handleRemoteProviderSelection"]>(
       async (_args, state) => {
+        expect(state.openRouterFeaturedModels).toBe(state.nvidiaFeaturedModels);
         state.model = ultra;
         state.provider = "nvidia-prod";
         state.endpointUrl = "https://integrate.api.nvidia.com/v1";
@@ -161,6 +169,7 @@ describe("createSetupNim", () => {
 
     await setupNim(null, null, dcodeAgent);
 
+    expect(createNvidiaFeaturedModelSession).toHaveBeenCalledTimes(1);
     expect(createNvidiaFeaturedModelSession).toHaveBeenCalledWith({
       defaultModel: ultra,
       writeLine: log,
@@ -481,6 +490,7 @@ describe("createSetupNim", () => {
   });
 
   it("recovers a recorded provider and model without prompting in non-interactive mode (#6245)", async () => {
+    const recoverySessionId = "session-recovery";
     const prompt = vi.fn(async () => unexpected("interactive provider prompt"));
     const note = vi.fn();
     const readRecordedProvider = vi.fn(() => "openai-api");
@@ -494,6 +504,7 @@ describe("createSetupNim", () => {
           recoveredFromSandbox: true,
           recoveredModel: "gpt-4.1",
           sandboxName: "existing-sandbox",
+          recoverySessionId,
         });
         state.model = args.recoveredModel;
         state.provider = "openai-api";
@@ -515,12 +526,22 @@ describe("createSetupNim", () => {
       }),
     );
 
-    const result = await setupNim(null, "existing-sandbox");
+    const result = await setupNim(
+      null,
+      "existing-sandbox",
+      null,
+      true,
+      null,
+      null,
+      undefined,
+      undefined,
+      recoverySessionId,
+    );
 
     expect(prompt).not.toHaveBeenCalled();
-    expect(readRecordedProvider).toHaveBeenCalledWith("existing-sandbox");
-    expect(readRecordedNimContainer).toHaveBeenCalledWith("existing-sandbox");
-    expect(readRecordedModel).toHaveBeenCalledWith("existing-sandbox");
+    expect(readRecordedProvider).toHaveBeenCalledWith("existing-sandbox", recoverySessionId);
+    expect(readRecordedNimContainer).toHaveBeenCalledWith("existing-sandbox", recoverySessionId);
+    expect(readRecordedModel).toHaveBeenCalledWith("existing-sandbox", recoverySessionId);
     expect(note).toHaveBeenCalledWith(
       "  [non-interactive] Provider: openai (recovered from sandbox 'existing-sandbox')",
     );

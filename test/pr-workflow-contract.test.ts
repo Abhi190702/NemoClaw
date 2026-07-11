@@ -83,7 +83,7 @@ const trustedActionDirs = [
   ".github/actions/ci-installer-integration",
 ] as const;
 
-const cliShardMatrix = [1, 2, 3, 4, 5] as const;
+const cliShardMatrix = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 const cliShardCount = String(cliShardMatrix.length);
 
 function stepRuns(jobOrAction: WorkflowJob | CompositeAction): string[] {
@@ -637,7 +637,7 @@ describe("pull request and main workflow contracts", () => {
     for (const path of ["bin/nemoclaw.js", "jsconfig.json", "package.json", "package-lock.json"]) {
       expect(jsFiles.test(path), path).toBe(true);
     }
-    expect(jsFiles.test("docs/_ext/nemoclaw.js")).toBe(false);
+    expect(jsFiles.test("docs/_components/nemoclaw.js")).toBe(false);
   });
 
   it("executes repo-wide coverage and diff-scoped automatic hook commands", () => {
@@ -1007,6 +1007,23 @@ describe("pull request and main workflow contracts", () => {
     expect(vitestConfig).toContain('name: "integration"');
     expect(vitestConfig).toContain('include: ["test/**/*.test.{js,ts}"]');
     expect(vitestConfig).toContain('name: "e2e-support"');
+    expect(stepRuns(prWorkflow.jobs["e2e-support"])).toEqual([
+      "npm ci --ignore-scripts",
+      "npx tsx scripts/checks/e2e-mock-parity.ts --base HEAD^1 --head HEAD^2",
+      "npm run build:cli",
+      "npx vitest run --project e2e-support",
+    ]);
+    expect(stepRuns(mainWorkflow.jobs["e2e-support"])).toEqual([
+      "npm ci --ignore-scripts",
+      `if [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+  echo "Skipping changed live E2E parity: main has no prior commit."
+  exit 0
+fi
+npx tsx scripts/checks/e2e-mock-parity.ts --base "$BASE_SHA" --head HEAD
+`,
+      "npm run build:cli",
+      "npx vitest run --project e2e-support",
+    ]);
     expect(vitestConfig).toContain('name: "package-contract"');
     expect(vitestConfig).toContain('"test/e2e/**"');
     expect(vitestConfig).toContain('"test/install-express-prompt.test.ts"');
@@ -1176,7 +1193,7 @@ describe("pull request and main workflow contracts", () => {
   });
 
   it("selects an available shard to publish the compiled CLI artifact", () => {
-    for (const shardCount of [1, 2, 3, 5]) {
+    for (const shardCount of [1, 2, 3, cliShardMatrix.length]) {
       const expectedProducer = Math.min(4, shardCount);
       const producers = Array.from({ length: shardCount }, (_, index) => index + 1).filter(
         (shard) => uploadsCompiledCliArtifact(sharedActions.cliCoverageShard, shard, shardCount),
@@ -1201,6 +1218,7 @@ describe("pull request and main workflow contracts", () => {
       "installer-integration",
       "cli-tests",
       "plugin-tests",
+      "e2e-support",
       "test-e2e-ollama-proxy",
     ]);
     expect(prWorkflow.jobs["cli-tests"].needs).toEqual(["changes", "cli-test-shards"]);
@@ -1212,6 +1230,7 @@ describe("pull request and main workflow contracts", () => {
       "installer-integration",
       "cli-tests",
       "plugin-tests",
+      "e2e-support",
       "test-e2e-ollama-proxy",
     ]) {
       expect(prChecksRun).toContain(`require_success "${jobName}"`);
@@ -1226,6 +1245,7 @@ describe("pull request and main workflow contracts", () => {
       "real-openclaw-dist-harness",
       "cli-tests",
       "plugin-tests",
+      "e2e-support",
       "test-e2e-ollama-proxy",
     ]);
     expect(mainWorkflow.jobs["cli-tests"].needs).toBe("cli-test-shards");
@@ -1236,6 +1256,7 @@ describe("pull request and main workflow contracts", () => {
       "real-openclaw-dist-harness",
       "cli-tests",
       "plugin-tests",
+      "e2e-support",
       "test-e2e-ollama-proxy",
     ]) {
       expect(mainChecksRun).toContain(`require_success "${jobName}"`);

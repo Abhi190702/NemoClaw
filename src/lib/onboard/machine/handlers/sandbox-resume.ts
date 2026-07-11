@@ -1,6 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import {
+  type WebSearchConfig,
+  webSearchEnvFor,
+  webSearchLabelFor,
+  webSearchProviderForConfig,
+} from "../../../inference/web-search";
 import type { Session } from "../../../state/onboard-session";
 import type { SandboxEntry } from "../../../state/registry";
 import { normalizeToolDisclosure, toolDisclosureOrDefault } from "../../../tool-disclosure";
@@ -13,9 +19,11 @@ export interface SandboxResumeSignals {
   readonly inferenceRouteConfigChanged: boolean;
   readonly webSearchConfigChanged: boolean;
   readonly sandboxGpuConfigChanged: boolean;
+  readonly recreateSandboxRequested: boolean;
   readonly messagingChannelConfigChanged: boolean;
   readonly hermesToolGatewayConfigChanged: boolean;
   readonly observabilityChanged?: boolean;
+  readonly dcodeAutoApprovalChanged?: boolean;
   readonly toolDisclosureMigrationNeeded: boolean;
   readonly toolDisclosureChanged: boolean;
   readonly inferenceSelectionChanged: boolean;
@@ -83,6 +91,30 @@ export type SandboxResumeDecision =
     }
   | { readonly kind: "repair-and-recreate" };
 
+export function mcpRegistryRemovalBlockReason(
+  decision: SandboxResumeDecision,
+  sandboxName: string | null,
+  webSearchConfig: WebSearchConfig | null,
+  getSandboxRegistryEntry: (sandboxName: string) => SandboxEntry | null,
+): string | null {
+  if (decision.kind !== "recreate" || !decision.removeRegistryEntry || !sandboxName) return null;
+  const mcpState = getSandboxRegistryEntry(sandboxName)?.mcp;
+  if (!mcpState) return null;
+
+  const selectedProvider = webSearchConfig ? webSearchProviderForConfig(webSearchConfig) : null;
+  if (selectedProvider) {
+    const credentialEnv = webSearchEnvFor(selectedProvider);
+    const collidingBridge = Object.values(mcpState.bridges).find((entry) =>
+      entry.env.includes(credentialEnv),
+    );
+    if (collidingBridge) {
+      return `  Cannot enable ${webSearchLabelFor(selectedProvider)}: MCP server '${collidingBridge.server}' already owns ${credentialEnv}. Use a distinct credential name.`;
+    }
+  }
+
+  return `  Sandbox '${sandboxName}' has managed MCP state. Use the transactional rebuild command before changing settings that recreate the sandbox.`;
+}
+
 export interface SandboxResumeDeps {
   note(message: string): void;
   removeSandboxFromRegistry(sandboxName: string): void;
@@ -104,9 +136,11 @@ function canReuseSandbox(signals: SandboxResumeSignals): boolean {
     !signals.inferenceSelectionChanged &&
     !signals.webSearchConfigChanged &&
     !signals.sandboxGpuConfigChanged &&
+    !signals.recreateSandboxRequested &&
     !signals.messagingChannelConfigChanged &&
     !signals.hermesToolGatewayConfigChanged &&
     !signals.observabilityChanged &&
+    !signals.dcodeAutoApprovalChanged &&
     !signals.toolDisclosureMigrationNeeded &&
     !signals.toolDisclosureChanged &&
     signals.sandboxReuseState === "ready"
@@ -164,6 +198,13 @@ function compatibilityResumeDecision(signals: SandboxResumeSignals): SandboxResu
 function runtimeConfigurationResumeDecision(
   signals: SandboxResumeSignals,
 ): SandboxResumeDecision | null {
+  if (signals.recreateSandboxRequested) {
+    return {
+      kind: "recreate",
+      note: "  [resume] Recreate sandbox requested; recreating sandbox.",
+      removeRegistryEntry: false,
+    };
+  }
   if (signals.webSearchConfigChanged) {
     return {
       kind: "recreate",
@@ -197,6 +238,14 @@ function runtimeConfigurationResumeDecision(
       kind: "recreate",
       note: "  [resume] Observability configuration changed; recreating sandbox.",
       // Preserve the row until createSandbox captures registry-only fidelity.
+      removeRegistryEntry: false,
+    };
+  }
+  if (signals.dcodeAutoApprovalChanged && signals.sandboxReuseState !== "not_ready") {
+    return {
+      kind: "recreate",
+      note: "  [resume] DCode auto-approval capability changed; recreating sandbox.",
+      // Preserve registry-only fidelity until createSandbox captures it.
       removeRegistryEntry: false,
     };
   }

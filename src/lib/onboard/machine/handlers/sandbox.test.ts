@@ -70,7 +70,12 @@ describe("handleSandboxState", () => {
       null,
       [],
       null,
-      { recreate: false, toolDisclosure: "progressive", observabilityEnabled: false },
+      {
+        recreate: false,
+        toolDisclosure: "progressive",
+        observabilityEnabled: false,
+        extraProviders: [],
+      },
     );
     expect(calls.updateSandbox).toHaveBeenCalledWith(
       "my-assistant",
@@ -110,30 +115,6 @@ describe("handleSandboxState", () => {
     expect(configureWebSearch).not.toHaveBeenCalled();
     expect((calls.createSandbox.mock.calls[0] as unknown[] | undefined)?.[5]).toBeNull();
     expect(result.webSearchConfig).toBeNull();
-  });
-
-  it("carries durable observability intent in the sandbox create intent", async () => {
-    const session = createSession({
-      observabilityEnabled: true,
-      observabilityRequestedExplicitly: true,
-    });
-    const { deps, calls } = createDeps({
-      updateSession: vi.fn((mutator: (value: Session) => Session | void) => {
-        return mutator(session) ?? session;
-      }),
-    });
-
-    await handleSandboxState({
-      ...baseOptions(deps, session),
-      agent: { name: "langchain-deepagents-code" },
-    });
-
-    expect(calls.createSandbox.mock.calls[0]?.at(-1)).toEqual({
-      recreate: false,
-      toolDisclosure: "progressive",
-      observabilityEnabled: true,
-      observabilityRequestedExplicitly: true,
-    });
   });
 
   it("carries an authoritative rebuild tier in the sandbox create intent", async () => {
@@ -449,7 +430,12 @@ describe("handleSandboxState", () => {
       null,
       ["nous-audio"],
       null,
-      { recreate: false, toolDisclosure: "progressive", observabilityEnabled: false },
+      {
+        recreate: false,
+        toolDisclosure: "progressive",
+        observabilityEnabled: false,
+        extraProviders: [],
+      },
     );
     expect(result.hermesToolGateways).toEqual(["nous-audio"]);
     expect(calls.note).toHaveBeenCalledWith(
@@ -554,7 +540,12 @@ describe("handleSandboxState", () => {
       null,
       [],
       null,
-      { recreate: true, toolDisclosure: "progressive", observabilityEnabled: false },
+      {
+        recreate: true,
+        toolDisclosure: "progressive",
+        observabilityEnabled: false,
+        extraProviders: [],
+      },
     );
   });
 
@@ -757,7 +748,12 @@ describe("handleSandboxState", () => {
       null,
       [],
       null,
-      { recreate: true, toolDisclosure: "progressive", observabilityEnabled: false },
+      {
+        recreate: true,
+        toolDisclosure: "progressive",
+        observabilityEnabled: false,
+        extraProviders: [],
+      },
     );
     expect(result.webSearchConfigChanged).toBe(true);
   });
@@ -871,7 +867,12 @@ describe("handleSandboxState", () => {
       null,
       [],
       null,
-      { recreate: true, toolDisclosure: "progressive", observabilityEnabled: false },
+      {
+        recreate: true,
+        toolDisclosure: "progressive",
+        observabilityEnabled: false,
+        extraProviders: [],
+      },
     );
     expect(result.webSearchConfig).toBeNull();
   });

@@ -25,6 +25,7 @@ const { fork } = require("child_process");
 const { randomBytes } = require("crypto");
 const { run, runCapture, validateName } = require("../runner");
 const { CLI_NAME }: typeof import("../cli/branding") = require("../cli/branding");
+const { isObjectRecord }: typeof import("../core/json-types") = require("../core/json-types");
 const {
   dockerExecFileSync,
   dockerSpawnSync,
@@ -825,12 +826,6 @@ function saveShieldsState(sandboxName: string, patch: ShieldsState): ShieldsStat
   fs.mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
   fs.writeFileSync(stateFilePath(sandboxName), JSON.stringify(updated, null, 2), { mode: 0o600 });
   return updated;
-}
-
-type UnknownRecord = { [key: string]: unknown };
-
-function isObjectRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isOptionalBoolean(value: unknown): value is boolean | undefined {
@@ -1998,7 +1993,12 @@ function lockAgentConfigUnderMutationLock(
 
     const { issues } = verifyShieldsLockState(sandboxName, target, {
       verifyChattr: chattrSucceeded,
-      verifyParentProtection: target.agentName === "hermes" || openClawProtocol,
+      // A sealed Hermes transaction deliberately keeps /sandbox frozen as
+      // root:root 0755 until finish publishes the prepared sticky/group
+      // parent metadata. Verify the recursively locked tree while rollback is
+      // still available, then verify the parent after the final commit below.
+      verifyParentProtection:
+        (target.agentName === "hermes" && transaction === null) || openClawProtocol,
       exec: (cmd: string[]) => privilegedSandboxExecCapture(sandboxName, cmd),
       assertLegacyLayout: assertNoLegacyStateLayout,
     });
@@ -2007,6 +2007,16 @@ function lockAgentConfigUnderMutationLock(
     const fileHashes = captureSealHashes(sandboxName, filesToLock);
     if (transaction) {
       finishHermesConfigShields(sandboxName, target, transaction.token);
+      transaction = null;
+      const committed = verifyShieldsLockState(sandboxName, target, {
+        verifyChattr: chattrSucceeded,
+        verifyParentProtection: true,
+        exec: (cmd: string[]) => privilegedSandboxExecCapture(sandboxName, cmd),
+        assertLegacyLayout: assertNoLegacyStateLayout,
+      });
+      if (committed.issues.length > 0) {
+        throw new Error(`Config not locked: ${committed.issues.join(", ")}`);
+      }
     }
     return { chattrApplied: chattrSucceeded, fileHashes };
   } catch (error) {

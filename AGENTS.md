@@ -52,6 +52,7 @@ Package-specific guides:
 | Run fast source tests | `npm run test:fast` |
 | Run integration tests | `npm run test:integration` |
 | Run package contracts | `npm run test:package` |
+| Run E2E support tests | `npx vitest run --project e2e-support` |
 | Run live E2E targets | `npm run test:live-e2e` |
 | Run plugin tests | `cd nemoclaw && npm test` |
 | Run repo-wide pre-commit and coverage checks | `npm run check` |
@@ -81,7 +82,8 @@ Tests are organized into disjoint Vitest projects defined in `vitest.config.ts`:
 3. **`installer-integration`** — installer tests that spawn real `install.sh` processes
 4. **`package-contract`** — `test/package-contract/**/*.test.ts` — the only non-live lane that imports compiled CLI/plugin artifacts
 5. **`plugin`** — `nemoclaw/src/**/*.test.ts` — plugin unit tests co-located with source
-6. **`e2e-support`** — fast tests for the E2E fixture/support layer
+6. **`e2e-support`** — fast tests for the E2E fixture/support layer; this project runs in the
+   aggregate checks for code-changing PRs and code-changing pushes to `main`
 7. **`e2e-live`** — opt-in live targets that mutate real external state
 8. **`e2e-branch-validation`** — opt-in validation on an ephemeral Brev instance
 
@@ -151,7 +153,7 @@ For shell scripts use `#` comments. For Markdown use HTML comments.
 
 ### No External Project Links
 
-Do not add links to third-party code repositories, community collections, or unofficial resources. Links to official tool documentation (Node.js, Python, uv) are acceptable.
+Do not add links to third-party code repositories, community collections, or unofficial resources. Links to official tool documentation (Node.js and Python) are acceptable.
 
 ## Git Hooks (prek)
 
@@ -168,10 +170,21 @@ All hooks managed by [prek](https://prek.j178.dev/) (installed via `npm install`
 ### Before Making Changes
 
 1. Read `CONTRIBUTING.md` for the full contributor guide
-2. For a first-time checkout, use `.agents/skills/nemoclaw-contributor-onboard/SKILL.md` or run `npm run dev:setup`
-3. Run `npm run dev:doctor` to verify the contributor environment without changing it
-4. Use `./scripts/dev-setup.sh --expose-cli` only with explicit approval for host-visible CLI exposure
-5. Run the tests targeted to the behavior you change once per relevant change set; rerun them after later edits or hook autofixes that can affect that behavior
+2. Before coding, state what success looks like. Ask only when a choice changes behavior, security, data safety, or a supported contract. Then make the smallest change that works. For a QA-escaped defect, also add the test or diagnostic that should have caught it.
+3. For a first-time checkout, use `.agents/skills/nemoclaw-contributor-onboard/SKILL.md` or run `npm run dev:setup`
+4. Run `npm run dev:doctor` to verify the contributor environment without changing it
+5. Use `./scripts/dev-setup.sh --expose-cli` only with explicit approval for host-visible CLI exposure
+6. Run the tests targeted to the behavior you change once per relevant change set; rerun them after later edits or hook autofixes that can affect that behavior
+
+### Plain Language and Direct Design
+
+- Use existing repository vocabulary and name what a thing does.
+- Remove modifiers that do not distinguish a real current case.
+- Use one name for one concept across issues, code, workflows, checks, logs, tests, and docs.
+- Do not turn one case into a system of categories or a new abstraction.
+- Do not add configuration, fallback, migration, compatibility, or extension layers without a current requirement. Name the current consumer and the test that protects the contract.
+- Report conclusions and evidence, not an analysis transcript.
+- Stop exploring once the smallest safe solution is clear.
 
 ### Git and GitHub Access Failures
 

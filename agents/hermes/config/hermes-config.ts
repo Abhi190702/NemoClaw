@@ -7,6 +7,7 @@ import {
   effectiveManagedToolGatewayPresets,
   loadManagedToolGatewayMatrix,
 } from "./managed-tool-gateway.ts";
+import { isObjectRecord } from "./object-record.ts";
 
 const REMOTE_PLATFORM_TOOLSETS = [
   "web",
@@ -55,6 +56,19 @@ export function buildHermesConfig(
   };
   const apiMode = hermesApiMode(settings.inferenceApi);
   if (apiMode) modelConfig.api_mode = apiMode;
+  // context_length on the model block is Hermes' highest-priority context
+  // override — above live /v1/models discovery and its built-in model-metadata
+  // registry. Setting it stops NemotronH-family models from falling back to a
+  // small architecture default when the endpoint actually serves a larger
+  // max_model_len (#6177). Omit it (null) to let Hermes auto-detect. Hermes
+  // reads only `context_length`; `context_window` is silently ignored.
+  //
+  // No separate auxiliary/compression context key is written: Hermes derives
+  // its compression trigger (compression.threshold × context_length) from the
+  // main model's context_length, so setting it here is sufficient for the
+  // reported "Cannot compress further" failure — the auxiliary/curator model is
+  // configured via auxiliary.* and needs no dedicated context length here.
+  if (settings.contextWindow !== null) modelConfig.context_length = settings.contextWindow;
 
   // Surface the managed endpoint to Hermes' model picker. The inline `model:`
   // block above is enough for the gateway to ROUTE inference, but the picker
@@ -90,7 +104,7 @@ export function buildHermesConfig(
   };
 
   const config: Record<string, unknown> = {
-    _config_version: 30,
+    _config_version: 32,
     _nemoclaw_upstream: upstream,
     model: modelConfig,
     providers: {
@@ -104,6 +118,10 @@ export function buildHermesConfig(
     agent: {
       max_turns: 60,
       reasoning_effort: "medium",
+      // Hermes config migrations v30 -> v32 disable the old implicit
+      // verify-on-stop behavior once. Generated configs start at v32, so
+      // persist the same migrated value instead of inheriting "auto".
+      verify_on_stop: false,
     },
     tools: {
       tool_search: {
@@ -222,9 +240,5 @@ function addEnabledPlatformToolsets(
 }
 
 function isEnabledPlatform(value: unknown): boolean {
-  return isObject(value) && value.enabled === true;
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return isObjectRecord(value) && value.enabled === true;
 }

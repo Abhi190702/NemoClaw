@@ -22,6 +22,7 @@ function makeArgs(sandboxName: string | null) {
     endpointUrl: ENDPOINT,
     credentialEnv: CREDENTIAL_ENV,
     preferredInferenceApi: "openai-completions",
+    pinnedAddresses: ["93.184.216.34"],
   };
 }
 
@@ -69,6 +70,9 @@ function createHarness() {
     bedrockRuntimeOnboard: {
       setupBedrockRuntimeInference: vi.fn(async () => ({ handled: false as const })),
     },
+    openrouterRuntimeOnboard: {
+      setupOpenRouterRuntimeInference: vi.fn(async () => ({ handled: false as const })),
+    },
     redact: vi.fn((value: string) => value),
     compactText: vi.fn((value: string) => value.trim()),
     probeOpenAiLikeEndpoint,
@@ -100,7 +104,7 @@ describe("custom Anthropic provider replacement on the OpenAI surface", () => {
       OPENAI_SURFACE,
       MODEL,
       "test-secret",
-      { skipResponsesProbe: true },
+      { skipResponsesProbe: true, pinnedAddresses: ["93.184.216.34"] },
     );
     expect(harness.readGatewayProviderMetadata).toHaveBeenCalledWith(
       PROVIDER,

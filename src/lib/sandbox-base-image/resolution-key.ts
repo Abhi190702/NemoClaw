@@ -8,6 +8,7 @@ import path from "node:path";
 import { dockerInfoFormat } from "../adapters/docker";
 import { ROOT } from "../runner";
 import {
+  getNearestVersionedBaseImageTags,
   getSourceShortShaTags,
   getVersionedBaseImageTags,
   normalizeBaseImageInputPaths,
@@ -18,9 +19,13 @@ import {
   SANDBOX_BASE_RESOLUTION_SCHEMA,
 } from "./types";
 
-function hashBaseImageInputs(rootDir: string, dockerfilePath: string): string {
+function hashBaseImageInputs(
+  rootDir: string,
+  dockerfilePath: string,
+  inputPaths: string[] = [],
+): string {
   const hash = crypto.createHash("sha256");
-  const paths = normalizeBaseImageInputPaths(rootDir, [dockerfilePath]).sort();
+  const paths = normalizeBaseImageInputPaths(rootDir, [dockerfilePath, ...inputPaths]).sort();
   for (const relativePath of paths) {
     hash.update(relativePath);
     hash.update("\0");
@@ -53,9 +58,10 @@ export function createSandboxBaseImageResolutionKey(options: ResolveBaseImageOpt
     pinnedRemoteRef: options.pinnedRemoteRef || null,
     ...(options.preferPinnedRemoteRef === true ? { preferPinnedRemoteRef: true } : {}),
     versionTags: getVersionedBaseImageTags(rootDir, env),
+    nearestVersionTags: getNearestVersionedBaseImageTags(rootDir, env),
     sourceTags: getSourceShortShaTags(rootDir, env),
     localTag: options.localTag,
-    inputFingerprint: hashBaseImageInputs(rootDir, options.dockerfilePath),
+    inputFingerprint: hashBaseImageInputs(rootDir, options.dockerfilePath, options.inputPaths),
     platform: dockerPlatform(),
     requireOpenshellSandboxAbi: options.requireOpenshellSandboxAbi === true,
     minGlibcVersion: options.minGlibcVersion || OPENSHELL_SANDBOX_MIN_GLIBC,

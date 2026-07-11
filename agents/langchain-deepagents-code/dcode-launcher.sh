@@ -6,11 +6,40 @@
 
 set -euo pipefail
 unset BASH_ENV ENV
+while IFS= read -r _nemoclaw_auto_approval_env; do
+  unset "$_nemoclaw_auto_approval_env"
+done < <(compgen -A variable NEMOCLAW_DCODE_AUTO_APPROVAL || true)
+unset _nemoclaw_auto_approval_env
 
 readonly MANAGED_DCODE_WRAPPER="/usr/local/lib/nemoclaw/dcode-wrapper.sh"
-readonly MANAGED_OBSERVABILITY_MARKER="/tmp/nemoclaw-observability-enabled"
+readonly MANAGED_EXEC_LAUNCHER="/usr/local/lib/nemoclaw/dcode-managed-exec"
+readonly MANAGED_OBSERVABILITY_MARKER="/sandbox/.deepagents/.nemoclaw-observability-enabled"
+readonly MANAGED_FETCH_CA_BUNDLE_FILE="/etc/openshell-tls/ca-bundle.pem"
+readonly MANAGED_SESSION_SUPERVISOR="/usr/local/lib/nemoclaw/dcode-session-supervisor.py"
 export HOME=/sandbox
 export PATH="/usr/local/bin:/opt/venv/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Raw OpenShell exec processes do not inherit the long-running entrypoint's
+# lowered limits or source shell startup hooks. Apply the same image-baked
+# resource contract before the managed wrapper or diagnostic command runs.
+_NEMOCLAW_SANDBOX_RLIMITS="/usr/local/lib/nemoclaw/sandbox-rlimits.sh"
+if [ ! -f "$_NEMOCLAW_SANDBOX_RLIMITS" ]; then
+  _NEMOCLAW_SANDBOX_RLIMITS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../scripts/lib/sandbox-rlimits.sh"
+fi
+if [ ! -f "$_NEMOCLAW_SANDBOX_RLIMITS" ]; then
+  printf '%s\n' '[SECURITY] Required sandbox-rlimits.sh is missing; refusing to launch dcode unhardened.' >&2
+  exit 1
+fi
+# shellcheck source=scripts/lib/sandbox-rlimits.sh
+. "$_NEMOCLAW_SANDBOX_RLIMITS"
+# shellcheck disable=SC2119 # optional $1 selects quiet mode, not launcher args.
+harden_resource_limits
+# shellcheck disable=SC2119 # optional $1 selects quiet mode, not launcher args.
+if ! verify_resource_limits_exact; then
+  printf '%s\n' '[SECURITY] Effective sandbox resource limits do not match policy; refusing to launch dcode unhardened.' >&2
+  exit 1
+fi
+unset _NEMOCLAW_SANDBOX_RLIMITS
 
 # Invalid state: raw OpenShell exec processes do not inherit the sandbox
 # entrypoint's environment, so an opted-in direct dcode exec can lose tracing.
@@ -70,10 +99,50 @@ read_managed_proxy_value() {
   printf '%s' "$value"
 }
 
+managed_fetch_ca_bundle_metadata() {
+  local file="$1"
+  local metadata
+  if metadata="$(stat -c '%u:%a:%s' "$file" 2>/dev/null)"; then
+    printf '%s' "$metadata"
+  else
+    stat -f '%u:%Lp:%z' "$file" 2>/dev/null
+  fi
+}
+
+validate_managed_fetch_ca_bundle() {
+  local file="$MANAGED_FETCH_CA_BUNDLE_FILE"
+  local metadata owner mode size extra
+  if [ -L "$file" ]; then
+    printf '%s\n' 'Missing or unsafe managed fetch CA bundle file.' >&2
+    return 1
+  fi
+  [ -e "$file" ] || return 0
+  if [ ! -f "$file" ] || [ ! -r "$file" ]; then
+    printf '%s\n' 'Missing or unsafe managed fetch CA bundle file.' >&2
+    return 1
+  fi
+  metadata="$(managed_fetch_ca_bundle_metadata "$file")" || {
+    printf '%s\n' 'Cannot inspect managed fetch CA bundle file.' >&2
+    return 1
+  }
+  IFS=: read -r owner mode size extra <<<"$metadata"
+  if [ -n "${extra:-}" ] \
+    || [[ ! "$owner" =~ ^[0-9]+$ ]] \
+    || [[ ! "$mode" =~ ^[0-7]{3,4}$ ]] \
+    || [[ ! "$size" =~ ^[0-9]+$ ]] \
+    || [ "$owner" != "$MANAGED_PROXY_OWNER_UID" ] \
+    || [ "$size" -le 0 ] \
+    || (((8#$mode & 0022) != 0)); then
+    printf '%s\n' 'Unsafe ownership or mode on managed fetch CA bundle file.' >&2
+    return 1
+  fi
+}
+
 # Onboard validates the build args and the Dockerfile stores them in root-owned
 # files. Runtime env is untrusted and cannot override those image-baked values.
 PROXY_HOST="$(read_managed_proxy_value "$MANAGED_PROXY_HOST_FILE" "host")"
 PROXY_PORT="$(read_managed_proxy_value "$MANAGED_PROXY_PORT_FILE" "port")"
+validate_managed_fetch_ca_bundle
 unset NEMOCLAW_PROXY_HOST NEMOCLAW_PROXY_PORT
 # Generic proxy fallbacks are outside the managed dcode contract and may carry
 # host credentials even after the scheme-specific proxy values are normalized.
@@ -108,6 +177,11 @@ fi
 
 _PROXY_URL="http://${PROXY_HOST}:${PROXY_PORT}"
 _NO_PROXY_VAL="localhost,127.0.0.1,::1,${PROXY_HOST}"
+# fetch_url cannot use its direct DNS-pinning transport inside OpenShell's
+# proxy-only network namespace. Opt only this managed launch into the explicit
+# trusted-proxy transport, using the same root-owned values as inference and
+# shell egress. The managed package patch still ignores ambient proxy values.
+export DEEPAGENTS_CODE_FETCH_URL_TRUSTED_PROXY_URL="$_PROXY_URL"
 export HTTP_PROXY="$_PROXY_URL"
 export HTTPS_PROXY="$_PROXY_URL"
 export NO_PROXY="$_NO_PROXY_VAL"
@@ -115,4 +189,35 @@ export http_proxy="$_PROXY_URL"
 export https_proxy="$_PROXY_URL"
 export no_proxy="$_NO_PROXY_VAL"
 
-exec "$MANAGED_DCODE_WRAPPER" "$@"
+# Diagnostics need this launcher's image-baked proxy normalization and optional
+# observability bit, but must not invoke the stateful sandbox entrypoint. Keep
+# the mode bound to a separate root-owned regular-file install so older images
+# fail before launching anything, then exact-exec without shell evaluation.
+if [ "$0" = "$MANAGED_EXEC_LAUNCHER" ]; then
+  if [ "$#" -eq 0 ]; then
+    printf '%s\n' 'dcode-managed-exec requires a command.' >&2
+    exit 64
+  fi
+  exec "$@"
+fi
+
+# Read-only managed identity commands never start DCode or LangGraph children.
+# Keep onboard's live-route validation on the established wrapper path while
+# supervising every command that can create a terminal-agent process tree.
+case "${1:-}" in
+  status | whoami | identity | --version | -v | -V) exec "$MANAGED_DCODE_WRAPPER" "$@" ;;
+esac
+
+# DCode's one-shot mode owns and cleans up its server lifecycle before exiting.
+# Keep that established automation path outside the interactive-session
+# supervisor; this also preserves the wrapper's exact parser diagnostics.
+_nemoclaw_dcode_args=("$@")
+for ((_nemoclaw_arg_index = 0; _nemoclaw_arg_index < ${#_nemoclaw_dcode_args[@]}; _nemoclaw_arg_index++)); do
+  _nemoclaw_arg="${_nemoclaw_dcode_args[_nemoclaw_arg_index]}"
+  case "$_nemoclaw_arg" in
+    -n | -n?* | --non-interactive | --non-interactive=*) exec "$MANAGED_DCODE_WRAPPER" "$@" ;;
+  esac
+done
+unset _nemoclaw_dcode_args _nemoclaw_arg_index _nemoclaw_arg
+
+exec /opt/venv/bin/python3 -I "$MANAGED_SESSION_SUPERVISOR" "$MANAGED_DCODE_WRAPPER" "$@"
