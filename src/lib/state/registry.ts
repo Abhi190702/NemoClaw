@@ -142,6 +142,8 @@ export interface SandboxEntry extends Partial<InferenceSelection> {
   hermesDashboardInternalPort?: number | null;
   hermesDashboardTui?: boolean;
   dashboardPort?: number | null;
+  /** Remote dashboard exposure was included in the sandbox's generated config. */
+  dashboardRemoteBindPrepared?: boolean;
   // OpenShell gateway registration name and host port bound to this sandbox.
   // Persisted so later lifecycle commands operate on the sandbox's own gateway
   // instead of the process-global `nemoclaw` singleton — a second sandbox on a
@@ -431,21 +433,22 @@ function normalizeSandboxEntryForRuntime(entry: SandboxEntry): SandboxEntry {
 
 /**
  * Prepare a sandbox entry for persistence: normalize messaging state and drop
- * transient #5714 display-only markers (`recoveredFromGateway`, `livePhase`)
+ * transient #5714 display-only markers plus legacy provider credential hashes
  * that must never reach sandboxes.json.
  */
 function serializeSandboxEntryForDisk(entry: SandboxEntry): SandboxEntry {
-  // #5714: defensively drop transient, display-only recovery markers so they
-  // can never reach sandboxes.json even if a caller force-passed one through
-  // updateSandbox(). These are not part of the durable SandboxEntry type; they
-  // live only on the ephemeral list-recovery rows.
+  // Defensively drop non-durable recovery markers and legacy
+  // providerCredentialHashes so they can never reach sandboxes.json even if a
+  // caller force-passed them through updateSandbox().
   const {
     recoveredFromGateway: _recovered,
     livePhase: _phase,
+    providerCredentialHashes: _legacyProviderCredentialHashes,
     ...durable
   } = entry as SandboxEntry & {
     recoveredFromGateway?: boolean;
     livePhase?: string | null;
+    providerCredentialHashes?: unknown;
   };
   const messaging = serializeSandboxMessagingStateForDisk(durable.messaging);
   const mcp = serializeSandboxMcpStateForDisk(durable.mcp);
@@ -543,6 +546,7 @@ export function registerSandbox(entry: SandboxEntry): void {
       hermesDashboardInternalPort: entry.hermesDashboardInternalPort ?? undefined,
       hermesDashboardTui: entry.hermesDashboardTui === true ? true : undefined,
       dashboardPort: entry.dashboardPort ?? undefined,
+      dashboardRemoteBindPrepared: entry.dashboardRemoteBindPrepared === true ? true : undefined,
       gatewayName: entry.gatewayName ?? undefined,
       gatewayPort: entry.gatewayPort ?? undefined,
     };
