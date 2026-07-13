@@ -992,6 +992,7 @@ describe("pull request and main workflow contracts", () => {
       E2E_SUPPORT_RESULT: "success",
       INSTALLER_INTEGRATION_RESULT: "success",
       PLUGIN_TESTS_RESULT: "success",
+      REVIEWED_NPM_AUDIT_RESULT: "success",
       STATIC_RESULT: "success",
     };
     const successfulMain = {
@@ -1001,6 +1002,7 @@ describe("pull request and main workflow contracts", () => {
       E2E_SUPPORT_RESULT: "success",
       INSTALLER_INTEGRATION_RESULT: "success",
       PLUGIN_TESTS_RESULT: "success",
+      REVIEWED_NPM_AUDIT_RESULT: "success",
       REAL_OPENCLAW_DIST_HARNESS_RESULT: "success",
       STATIC_RESULT: "success",
     };
@@ -1020,6 +1022,7 @@ describe("pull request and main workflow contracts", () => {
       E2E_SUPPORT_RESULT: "skipped",
       INSTALLER_INTEGRATION_RESULT: "skipped",
       PLUGIN_TESTS_RESULT: "skipped",
+      REVIEWED_NPM_AUDIT_RESULT: "skipped",
       STATIC_RESULT: "skipped",
     });
     const mainSuccess = runWorkflowShellStep(mainGate, successfulMain);
