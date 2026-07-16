@@ -2892,7 +2892,17 @@ validate_station_deepseek_override() {
     error "--station-deepseek cannot be combined with NEMOCLAW_NO_EXPRESS=1. Remove one override."
   fi
   if [ "${NON_INTERACTIVE:-}" = "1" ]; then
-    error "--station-deepseek selects the DGX Station express prompt and cannot be combined with --non-interactive."
+    # #7009: name what actually put the run in non-interactive mode so the user
+    # can act on it. NON_INTERACTIVE_SOURCE is recorded in main() where the
+    # origin is still known (main exports NON_INTERACTIVE into
+    # NEMOCLAW_NON_INTERACTIVE, erasing the distinction here). Append the clause
+    # only when the origin is known, so direct callers that set NON_INTERACTIVE
+    # without going through main's flag parsing still get a clean message.
+    local trigger_note=""
+    if [ -n "${NON_INTERACTIVE_SOURCE:-}" ]; then
+      trigger_note=" (triggered by: ${NON_INTERACTIVE_SOURCE})"
+    fi
+    error "--station-deepseek selects the DGX Station express prompt and cannot be combined with non-interactive mode${trigger_note}."
   fi
   if [ -n "${NEMOCLAW_PROVIDER:-}" ]; then
     error "--station-deepseek conflicts with NEMOCLAW_PROVIDER=${NEMOCLAW_PROVIDER}. Remove the provider override to use Station express install."
@@ -3106,12 +3116,20 @@ main() {
 
   # Parse flags
   NON_INTERACTIVE=""
+  # #7009: record what put the run in non-interactive mode so conflict errors
+  # (e.g. validate_station_deepseek_override) can name the trigger. main()
+  # exports NON_INTERACTIVE into NEMOCLAW_NON_INTERACTIVE below, so the origin
+  # cannot be recovered from the env at error time — track it here instead.
+  NON_INTERACTIVE_SOURCE=""
   ACCEPT_THIRD_PARTY_SOFTWARE=""
   FRESH=""
   STATION_DEEPSEEK=""
   for arg in "$@"; do
     case "$arg" in
-      --non-interactive) NON_INTERACTIVE=1 ;;
+      --non-interactive)
+        NON_INTERACTIVE=1
+        NON_INTERACTIVE_SOURCE="the --non-interactive flag"
+        ;;
       --yes-i-accept-third-party-software) ACCEPT_THIRD_PARTY_SOFTWARE=1 ;;
       --fresh) FRESH=1 ;;
       --station-deepseek) STATION_DEEPSEEK=1 ;;
@@ -3133,6 +3151,9 @@ main() {
   done
   # Also honor env var
   NON_INTERACTIVE="${NON_INTERACTIVE:-${NEMOCLAW_NON_INTERACTIVE:-}}"
+  if [ "${NON_INTERACTIVE:-}" = "1" ] && [ -z "${NON_INTERACTIVE_SOURCE:-}" ]; then
+    NON_INTERACTIVE_SOURCE="NEMOCLAW_NON_INTERACTIVE=1"
+  fi
   ACCEPT_THIRD_PARTY_SOFTWARE="${ACCEPT_THIRD_PARTY_SOFTWARE:-${NEMOCLAW_ACCEPT_THIRD_PARTY_SOFTWARE:-}}"
   FRESH="${FRESH:-${NEMOCLAW_FRESH:-}}"
 
@@ -3142,7 +3163,15 @@ main() {
   # (run_onboard has the same gate). Without this, ACCEPT_THIRD_PARTY_SOFTWARE=1
   # alone clears the preflight below but the install can still partial-fail at
   # run_onboard with the same TTY error, leaving phases 1/2 on disk anyway.
-  if [ "${ACCEPT_THIRD_PARTY_SOFTWARE:-}" = "1" ] && [ "${NON_INTERACTIVE:-}" != "1" ]; then
+  #
+  # #7008: `--station-deepseek` is the exception — it explicitly selects the
+  # interactive DGX Station express prompt, so accepting the notice must NOT
+  # imply non-interactive there. The two signals are orthogonal: one accepts a
+  # licence, the other opts into an interactive express flow. Inferring
+  # non-interactive from the notice would make the express flow reject its own
+  # required flag (validate_station_deepseek_override).
+  if [ "${ACCEPT_THIRD_PARTY_SOFTWARE:-}" = "1" ] && [ "${NON_INTERACTIVE:-}" != "1" ] \
+    && [ "${STATION_DEEPSEEK:-}" != "1" ]; then
     NON_INTERACTIVE=1
   fi
 
