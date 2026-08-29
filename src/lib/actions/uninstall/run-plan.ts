@@ -3242,9 +3242,7 @@ function executePlan(
           )
             ok = false;
           if (!removePathExcept(paths.nemoclawConfigDir, ["portable"], runtime)) ok = false;
-        } else {
-          removePath(paths.nemoclawConfigDir, runtime);
-        }
+        } else if (!removePathExcept(paths.nemoclawConfigDir, ["portable"], runtime)) ok = false;
       }
     }
   }

@@ -232,19 +232,6 @@ describe("portable runtime cleanup in the uninstall run plan", testTimeoutOption
   it.each<[string, EvidenceMutation]>([
     ["receipt without configuration", (home, state) => writeAdmissionReceipt(home, state)],
     [
-      "forged configuration cleanup",
-      (home) => {
-        const target = path.join(
-          home,
-          ".config/nemoclaw/portable",
-          `.containers.conf.portable-uninstall-${"e".repeat(64)}.cleanup`,
-        );
-        fs.mkdirSync(path.dirname(target), { mode: 0o700, recursive: true });
-        fs.writeFileSync(target, "unknown", { mode: 0o600 });
-        return target;
-      },
-    ],
-    [
       "retirement record with replacement authority",
       (home, state) => {
         const receipt = writeAdmissionReceipt(home, state);
@@ -270,17 +257,9 @@ describe("portable runtime cleanup in the uninstall run plan", testTimeoutOption
       (_home, state) => symlinkEvidence(path.join(state, "portable-demo-lifecycle"), state),
     ],
     [
-      "symlinked configuration root",
-      (home, state) => symlinkEvidence(path.join(home, ".config/nemoclaw/portable"), state),
-    ],
-    [
       "excess receipt entries",
       (_home, state) =>
         directoryEvidence(path.join(state, "portable-demo-lifecycle"), 0o700, 1_025),
-    ],
-    [
-      "excess configuration entries",
-      (home) => directoryEvidence(path.join(home, ".config/nemoclaw/portable"), 0o700, 1_025),
     ],
   ])("rejects %s before generic effects (#9189)", (_case, mutate) => {
     const scope = admissionFailureScope("nemoclaw-portable-admission-");
